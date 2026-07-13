@@ -20,13 +20,13 @@ use crate::{
 };
 
 pub trait NbtValue: Sized + 'static {
-    fn nbt_from_str(s: String) -> Result<Self, ()>;
+    fn nbt_from_str(s: String) -> Option<Self>;
     fn nbt_to_str(&self) -> String;
 }
 
 impl NbtValue for Mutf8String {
-    fn nbt_from_str(s: String) -> Result<Self, ()> {
-        Ok(Mutf8String::from_string(s))
+    fn nbt_from_str(s: String) -> Option<Self> {
+        Some(Mutf8String::from_string(s))
     }
 
     fn nbt_to_str(&self) -> String {
@@ -35,8 +35,8 @@ impl NbtValue for Mutf8String {
 }
 
 impl NbtValue for () {
-    fn nbt_from_str(_: String) -> Result<Self, ()> {
-        Ok(())
+    fn nbt_from_str(_: String) -> Option<Self> {
+        Some(())
     }
 
     fn nbt_to_str(&self) -> String {
@@ -47,8 +47,8 @@ impl NbtValue for () {
 macro_rules! impl_fromstr2 {
     ($($t:ty),*) => {
         $(impl NbtValue for $t {
-            fn nbt_from_str(s: String) -> Result<Self, ()> {
-                s.parse().map_err(|_| ())
+            fn nbt_from_str(s: String) -> Option<Self> {
+                s.parse().ok()
             }
 
             fn nbt_to_str(&self) -> String {
@@ -64,7 +64,7 @@ pub trait NbtValueTo<T> {
     fn to(self) -> T;
 }
 
-impl<'a, S, D> NbtValueTo<D> for &'a S
+impl<S, D> NbtValueTo<D> for &S
 where
     D: TryFrom<S> + Default,
     S: Copy,
@@ -74,7 +74,7 @@ where
     }
 }
 
-impl<'a, S, D> NbtValueTo<D> for &'a mut S
+impl<S, D> NbtValueTo<D> for &mut S
 where
     D: TryFrom<S> + Default,
     S: Copy,
@@ -206,6 +206,16 @@ macro_rules! conv_warn {
                 .ui(ui);
         });
     };
+}
+
+struct EntryContext<'val, 'key, 'extra, 'icon, 'th, T, ContextMenuFn: FnMut(&mut Ui)> {
+    val: Option<&'val T>,
+    key: Option<&'key str>,
+    idx: Option<usize>,
+    extra: Option<&'extra str>,
+    icon: &'icon (char, FontFamily),
+    type_hint: &'th str,
+    context_menu: ContextMenuFn,
 }
 
 impl NbtTabViewer {
@@ -392,9 +402,9 @@ impl NbtTabViewer {
                 ui,
                 id,
                 nbt.name().to_str().as_ref(),
-                &*self.translations.t("unnamed-root-nbt-text-hint"),
+                &self.translations.t("unnamed-root-nbt-text-hint"),
             ) {
-                let old = std::mem::replace(nbt, BaseNbt::default());
+                let old = std::mem::take(nbt);
                 let tag = old.as_compound();
                 *nbt = BaseNbt::new(Mutf8String::from_string(new_name), tag);
             }
@@ -477,13 +487,15 @@ impl NbtTabViewer {
         id: &NbtNodeId,
         egui_id: Id,
         builder: &mut TreeViewBuilder<NbtNodeId>,
-        val: Option<&T>,
-        key: Option<&str>,
-        idx: Option<usize>,
-        extra: Option<&str>,
-        icon: &(char, FontFamily),
-        type_hint: &str,
-        context_menu: impl FnMut(&mut Ui),
+        EntryContext {
+            val,
+            key,
+            idx,
+            extra,
+            icon,
+            type_hint,
+            context_menu,
+        }: EntryContext<'_, '_, '_, '_, '_, T, impl FnMut(&mut Ui)>,
     ) -> (bool, Option<String>, Option<T>) {
         let mut ret = None;
         let mut ret_new_val = None;
@@ -512,9 +524,9 @@ impl NbtTabViewer {
                                 ui,
                                 egui_id.with("editable-key"),
                                 key,
-                                &*self.translations.t("editable-key-empty-text"),
+                                &self.translations.t("editable-key-empty-text"),
                             )
-                            .and_then(|s| if s.trim().is_empty() { None } else { Some(s) })
+                            .filter(|s| !s.trim().is_empty())
                         }
 
                         if let Some(idx) = idx {
@@ -537,8 +549,8 @@ impl NbtTabViewer {
                                 ui,
                                 egui_id.with("editable-value"),
                                 &val.nbt_to_str(),
-                                &*self.translations.t("editable-value-empty-text"),
-                            ) && let Ok(parsed) = T::nbt_from_str(new_val)
+                                &self.translations.t("editable-value-empty-text"),
+                            ) && let Some(parsed) = T::nbt_from_str(new_val)
                             {
                                 ret_new_val = Some(parsed);
                             }
@@ -596,15 +608,17 @@ impl NbtTabViewer {
                             id,
                             egui_id,
                             builder,
-                            Some(value),
-                            None,
-                            Some(idx),
-                            None,
-                            $icon,
-                            &*self.translations.t($th),
-                            |ui| {
-                                // TODO: List element context menu
-                                ui.label("TODO: List element context menu");
+                            EntryContext {
+                                val: Some(value),
+                                key: None,
+                                idx: Some(idx),
+                                extra: None,
+                                icon: $icon,
+                                type_hint: &*self.translations.t($th),
+                                context_menu: |ui| {
+                                    // TODO: List element context menu
+                                    ui.label("TODO: List element context menu");
+                                },
                             },
                         );
 
@@ -628,18 +642,20 @@ impl NbtTabViewer {
                             id,
                             egui_id,
                             builder,
-                            None,
-                            None,
-                            Some(idx),
-                            Some(&self.translations.f(
-                                "list-element-count",
-                                &HashMap::from([("count".into(), value.len().into())]),
-                            )),
-                            &self.icon_array,
-                            &*self.translations.t($th),
-                            |ui| {
-                                // TODO: List of arrays subarray context menu
-                                ui.label("TODO: List of arrays subarray context menu");
+                            EntryContext {
+                                val: None,
+                                key: None,
+                                idx: Some(idx),
+                                extra: Some(&self.translations.f(
+                                    "list-element-count",
+                                    &HashMap::from([("count".into(), value.len().into())]),
+                                )),
+                                icon: &self.icon_array,
+                                type_hint: &*self.translations.t($th),
+                                context_menu: |ui| {
+                                    // TODO: List of arrays subarray context menu
+                                    ui.label("TODO: List of arrays subarray context menu");
+                                },
                             },
                         );
 
@@ -654,17 +670,19 @@ impl NbtTabViewer {
                                         id,
                                         egui_id,
                                         builder,
-                                        Some(value),
-                                        None,
-                                        Some(idx),
-                                        None,
-                                        &self.icon_numeric,
-                                        &*self.translations.t($th_elem),
-                                        |ui| {
-                                            // TODO: List of arrays subelement context menu
-                                            ui.label(
-                                                "TODO: List of arrays subelement context menu",
-                                            );
+                                        EntryContext {
+                                            val: Some(value),
+                                            key: None,
+                                            idx: Some(idx),
+                                            extra: None,
+                                            icon: &self.icon_numeric,
+                                            type_hint: &*self.translations.t($th_elem),
+                                            context_menu: |ui| {
+                                                // TODO: List of arrays subelement context menu
+                                                ui.label(
+                                                    "TODO: List of arrays subelement context menu",
+                                                );
+                                            },
                                         },
                                     );
 
@@ -750,21 +768,25 @@ impl NbtTabViewer {
                         id,
                         egui_id,
                         builder,
-                        None,
-                        None,
-                        Some(idx),
-                        Some(&self.translations.f(
-                            "list-element-count",
-                            &HashMap::from([("count".into(), list_len.into())]),
-                        )),
-                        &self.icon_list,
-                        &*self.translations.t(nbt_list_type_hint(value)),
-                        |ui| {
-                            if let Some(to_tag) = self
-                                .show_nbt_list_entry_context_menu_type_conversion(ui, value, false)
-                            {
-                                edit_value = Some(to_tag);
-                            }
+                        EntryContext {
+                            val: None,
+                            key: None,
+                            idx: Some(idx),
+                            extra: Some(&self.translations.f(
+                                "list-element-count",
+                                &HashMap::from([("count".into(), list_len.into())]),
+                            )),
+                            icon: &self.icon_list,
+                            type_hint: &self.translations.t(nbt_list_type_hint(value)),
+                            context_menu: |ui| {
+                                if let Some(to_tag) = self
+                                    .show_nbt_list_entry_context_menu_type_conversion(
+                                        ui, value, false,
+                                    )
+                                {
+                                    edit_value = Some(to_tag);
+                                }
+                            },
                         },
                     );
 
@@ -785,18 +807,20 @@ impl NbtTabViewer {
                         id,
                         egui_id,
                         builder,
-                        None,
-                        None,
-                        Some(idx),
-                        Some(&self.translations.f(
-                            "compound-keys-count",
-                            &HashMap::from([("count".into(), value.iter().count().into())]),
-                        )),
-                        &self.icon_compound_nbt,
-                        &*self.translations.t("type-hint-compound"),
-                        |ui| {
-                            // TODO: Compound in list context menu
-                            ui.label("TODDO: Compound in list context menu");
+                        EntryContext {
+                            val: None,
+                            key: None,
+                            idx: Some(idx),
+                            extra: Some(&self.translations.f(
+                                "compound-keys-count",
+                                &HashMap::from([("count".into(), value.iter().count().into())]),
+                            )),
+                            icon: &self.icon_compound_nbt,
+                            type_hint: &self.translations.t("type-hint-compound"),
+                            context_menu: |ui| {
+                                // TODO: Compound in list context menu
+                                ui.label("TODDO: Compound in list context menu");
+                            },
                         },
                     );
 
@@ -1136,13 +1160,15 @@ impl NbtTabViewer {
                         id,
                         egui_id,
                         builder,
-                        Some($value),
-                        Some(key.to_str().as_ref()),
-                        None,
-                        None,
-                        $icon,
-                        &*self.translations.t($th),
-                        $ctx_menu,
+                        EntryContext {
+                            val: Some($value),
+                            key: Some(key.to_str().as_ref()),
+                            idx: None,
+                            extra: None,
+                            icon: $icon,
+                            type_hint: &*self.translations.t($th),
+                            context_menu: $ctx_menu,
+                        },
                     );
 
                     edit = m_edit.map(|s| (idx, s)).or(edit);
@@ -1159,18 +1185,20 @@ impl NbtTabViewer {
                         id,
                         egui_id,
                         builder,
-                        None,
-                        Some(key.to_str().as_ref()),
-                        None,
-                        Some(&self.translations.f(
-                            "list-element-count",
-                            &HashMap::from([("count".into(), $values.len().into())]),
-                        )),
-                        &self.icon_array,
-                        &*self.translations.t($th),
-                        |ui| {
-                            // TODO: Array in compound context menu
-                            ui.label("TODO: Array in compound context menu");
+                        EntryContext {
+                            val: None,
+                            key: Some(key.to_str().as_ref()),
+                            idx: None,
+                            extra: Some(&self.translations.f(
+                                "list-element-count",
+                                &HashMap::from([("count".into(), $values.len().into())]),
+                            )),
+                            icon: &self.icon_array,
+                            type_hint: &*self.translations.t($th),
+                            context_menu: |ui| {
+                                // TODO: Array in compound context menu
+                                ui.label("TODO: Array in compound context menu");
+                            },
                         },
                     );
 
@@ -1187,15 +1215,17 @@ impl NbtTabViewer {
                                     id,
                                     egui_id,
                                     builder,
-                                    Some(value),
-                                    None,
-                                    Some(idx),
-                                    None,
-                                    $icon,
-                                    &*self.translations.t($th_elem),
-                                    |ui| {
-                                        // TODO: Array element context menu
-                                        ui.label("TODO: Array element context menu");
+                                    EntryContext {
+                                        val: Some(value),
+                                        key: None,
+                                        idx: Some(idx),
+                                        extra: None,
+                                        icon: $icon,
+                                        type_hint: &*self.translations.t($th_elem),
+                                        context_menu: |ui| {
+                                            // TODO: Array element context menu
+                                            ui.label("TODO: Array element context menu");
+                                        },
                                     },
                                 );
 
@@ -1379,18 +1409,20 @@ impl NbtTabViewer {
                         id,
                         egui_id,
                         builder,
-                        None,
-                        Some(key.to_str().as_ref()),
-                        None,
-                        Some(&self.translations.f(
-                            "compound-keys-count",
-                            &HashMap::from([("count".into(), c.iter().count().into())]),
-                        )),
-                        &self.icon_compound_nbt,
-                        &*self.translations.t("type-hint-compound"),
-                        |ui| {
-                            // TODO: Compound in compound context menu
-                            ui.label("TODO: Compound in compound context menu");
+                        EntryContext {
+                            val: None,
+                            key: Some(key.to_str().as_ref()),
+                            idx: None,
+                            extra: Some(&self.translations.f(
+                                "compound-keys-count",
+                                &HashMap::from([("count".into(), c.iter().count().into())]),
+                            )),
+                            icon: &self.icon_compound_nbt,
+                            type_hint: &self.translations.t("type-hint-compound"),
+                            context_menu: |ui| {
+                                // TODO: Compound in compound context menu
+                                ui.label("TODO: Compound in compound context menu");
+                            },
                         },
                     );
 
@@ -1422,7 +1454,7 @@ impl NbtTabViewer {
                                     ui,
                                     egui_id.with("editable-key"),
                                     key.to_str().as_ref(),
-                                    &*self.translations.t("editable-key-empty-text"),
+                                    &self.translations.t("editable-key-empty-text"),
                                 )
                                 .and_then(|s| {
                                     if s.trim().is_empty() {
@@ -1457,21 +1489,23 @@ impl NbtTabViewer {
                         id,
                         egui_id,
                         builder,
-                        None,
-                        Some(key.to_str().as_ref()),
-                        None,
-                        Some(&self.translations.f(
-                            "list-element-count",
-                            &HashMap::from([("count".into(), list_len.into())]),
-                        )),
-                        &self.icon_list,
-                        &*self.translations.t(nbt_list_type_hint(l)),
-                        |ui| {
-                            if let Some(n_value) =
-                                self.show_nbt_list_entry_context_menu_type_conversion(ui, l, true)
-                            {
-                                update_type = Some(n_value);
-                            }
+                        EntryContext {
+                            val: None,
+                            key: Some(key.to_str().as_ref()),
+                            idx: None,
+                            extra: Some(&self.translations.f(
+                                "list-element-count",
+                                &HashMap::from([("count".into(), list_len.into())]),
+                            )),
+                            icon: &self.icon_list,
+                            type_hint: &self.translations.t(nbt_list_type_hint(l)),
+                            context_menu: |ui| {
+                                if let Some(n_value) = self
+                                    .show_nbt_list_entry_context_menu_type_conversion(ui, l, true)
+                                {
+                                    update_type = Some(n_value);
+                                }
+                            },
                         },
                     );
 
@@ -1492,12 +1526,11 @@ impl NbtTabViewer {
             id.pop();
         }
 
-        if let Some((idx, new_key)) = edit {
-            if !nbt.contains(&new_key) {
-                nbt.keys_mut().nth(idx).map(|k| {
-                    *k = new_key.into();
-                });
-            }
+        if let Some((idx, new_key)) = edit
+            && !nbt.contains(&new_key)
+            && let Some(k) = nbt.keys_mut().nth(idx)
+        {
+            *k = new_key.into();
         }
     }
 }

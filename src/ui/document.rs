@@ -83,11 +83,11 @@ impl DocumentData {
 
     #[inline(always)]
     fn try_from_raw(bytes: &[u8]) -> anyhow::Result<Self> {
-        let nbt = simdnbt::owned::read(&mut Cursor::new(&bytes))?;
+        let nbt = simdnbt::owned::read(&mut Cursor::new(bytes))?;
         Ok(Self::Nbt(nbt, NbtCompression::None))
     }
 
-    pub fn load_from_file<'a>(path: impl AsRef<Path>) -> Result<Self, NbtParseError> {
+    pub fn load_from_file(path: impl AsRef<Path>) -> Result<Self, NbtParseError> {
         let path = path.as_ref();
         let bytes = fs::read(path)?;
 

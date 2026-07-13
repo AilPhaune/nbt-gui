@@ -112,47 +112,46 @@ impl App for NbtEditorApplication {
 
                     ui.separator();
 
-                    if ui.button(&*self.translations.t("menu-file-save")).clicked() {
-                        if let Some((_rect, tab)) = self.dock_state.find_active_focused() {
-                            let tab_id = tab.tab_id;
-                            let save = tab.action_save();
-                            let mut event_tx = self.tab_viewer.events_tx.clone();
-                            self.runtime.spawn(async move {
-                                let (path, data, result) = save.await;
-                                // only possible errors are `Full` (doesn't happen because the channel is unbounded) and `Disconnected` (in which case we don't care)
-                                let _ = event_tx
-                                    .send(TabEvent::SaveFileTabResult {
-                                        tab_id,
-                                        path,
-                                        data,
-                                        result,
-                                    })
-                                    .await;
-                            });
-                        }
+                    if ui.button(&*self.translations.t("menu-file-save")).clicked()
+                        && let Some((_rect, tab)) = self.dock_state.find_active_focused()
+                    {
+                        let tab_id = tab.tab_id;
+                        let save = tab.action_save();
+                        let mut event_tx = self.tab_viewer.events_tx.clone();
+                        self.runtime.spawn(async move {
+                            let (path, data, result) = save.await;
+                            // only possible errors are `Full` (doesn't happen because the channel is unbounded) and `Disconnected` (in which case we don't care)
+                            let _ = event_tx
+                                .send(TabEvent::SaveFileTabResult {
+                                    tab_id,
+                                    path,
+                                    data,
+                                    result,
+                                })
+                                .await;
+                        });
                     }
 
                     if ui
                         .button(&*self.translations.t("menu-file-save-as"))
                         .clicked()
+                        && let Some((_rect, tab)) = self.dock_state.find_active_focused()
                     {
-                        if let Some((_rect, tab)) = self.dock_state.find_active_focused() {
-                            let tab_id = tab.tab_id;
-                            let save = tab.action_save_as();
-                            let mut event_tx = self.tab_viewer.events_tx.clone();
-                            self.runtime.spawn(async move {
-                                let (path, data, result) = save.await;
-                                // only possible errors are `Full` (doesn't happen because the channel is unbounded) and `Disconnected` (in which case we don't care)
-                                let _ = event_tx
-                                    .send(TabEvent::SaveFileTabResult {
-                                        tab_id,
-                                        path,
-                                        data,
-                                        result,
-                                    })
-                                    .await;
-                            });
-                        }
+                        let tab_id = tab.tab_id;
+                        let save = tab.action_save_as();
+                        let mut event_tx = self.tab_viewer.events_tx.clone();
+                        self.runtime.spawn(async move {
+                            let (path, data, result) = save.await;
+                            // only possible errors are `Full` (doesn't happen because the channel is unbounded) and `Disconnected` (in which case we don't care)
+                            let _ = event_tx
+                                .send(TabEvent::SaveFileTabResult {
+                                    tab_id,
+                                    path,
+                                    data,
+                                    result,
+                                })
+                                .await;
+                        });
                     }
 
                     if ui.button(&*self.translations.t("menu-file-exit")).clicked() {
@@ -259,23 +258,23 @@ impl App for NbtEditorApplication {
                     data,
                     result,
                 } => {
-                    self.find_tab(tab_id).map(|tab| {
+                    if let Some(tab) = self.find_tab(tab_id) {
                         if let Some(path) = path {
                             tab.saved_location = Some(path);
                         }
                         tab.data = data;
-                    });
+                    }
                     if let Err(e) = result {
                         self.errors.push(e);
                     }
                 }
                 TabEvent::DoneOpeningNewTabFile { tab_id, data } => {
-                    self.find_tab(tab_id).map(|tab| {
+                    if let Some(tab) = self.find_tab(tab_id) {
                         tab.data = match data {
                             Ok(d) => d,
                             Err(e) => DocumentData::ReadError(Arc::new(e)),
-                        }
-                    });
+                        };
+                    }
                 }
             }
         }

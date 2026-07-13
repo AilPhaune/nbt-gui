@@ -16,7 +16,7 @@ fn main() -> eframe::Result<()> {
     let translations = Arc::new(Translations::load(unic_langid::langid!("en-US")).unwrap());
 
     eframe::run_native(
-        &*translations.t("app-title"),
+        &translations.t("app-title"),
         options,
         Box::new(|cc| {
             let mut definitions = FontDefinitions::default();
