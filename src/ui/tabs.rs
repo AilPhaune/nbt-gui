@@ -1,7 +1,10 @@
 use std::{collections::HashMap, path::PathBuf, str::FromStr, sync::Arc};
 
 use anyhow::{Context, anyhow};
-use egui::{FontFamily, Id, Key, Label, RichText, Sense, Spinner, Stroke, TextEdit, Ui, Widget};
+use egui::{
+    Align, FontFamily, Id, Key, Label, Layout, RichText, Sense, Spinner, Stroke, TextEdit, Ui,
+    Widget,
+};
 use egui_dock::{TabViewer, tab_viewer::OnCloseResponse};
 use egui_ltreeview::{NodeBuilder, TreeView, TreeViewBuilder};
 use futures::channel::mpsc::{UnboundedReceiver, UnboundedSender, unbounded};
@@ -191,6 +194,18 @@ fn nbt_list_len(list: &NbtList) -> usize {
         NbtList::Short(vals) => vals.len(),
         NbtList::String(vals) => vals.len(),
     }
+}
+
+macro_rules! conv_warn {
+    ($t: expr, $ui: ident) => {
+        $ui.allocate_ui_with_layout(egui::vec2(300.0, 0.0), Layout::top_down(Align::Min), |ui| {
+            Label::new(&*$t.t("dt-conv-warn"))
+                .sense(Sense::empty())
+                .selectable(false)
+                .wrap()
+                .ui(ui);
+        });
+    };
 }
 
 impl NbtTabViewer {
@@ -550,7 +565,7 @@ impl NbtTabViewer {
         egui_id: Id,
         builder: &mut TreeViewBuilder<NbtNodeId>,
         values: &mut [T],
-        renderer: impl Fn(&mut NbtNodeId, Id, &mut TreeViewBuilder<NbtNodeId>, usize, &mut T),
+        mut renderer: impl FnMut(&mut NbtNodeId, Id, &mut TreeViewBuilder<NbtNodeId>, usize, &mut T),
     ) {
         for (idx, value) in values.iter_mut().enumerate() {
             id.push(idx as u32);
@@ -568,7 +583,7 @@ impl NbtTabViewer {
         id: &mut NbtNodeId,
         egui_id: Id,
         builder: &mut TreeViewBuilder<NbtNodeId>,
-    ) {
+    ) -> Option<NbtTag> {
         macro_rules! simple_view_list {
             ($values: ident, $icon: expr, $th: expr) => {
                 self.show_list(
@@ -577,7 +592,7 @@ impl NbtTabViewer {
                     builder,
                     $values,
                     |id, egui_id, builder, idx, value| {
-                        self.show_entry(
+                        let (_, _, new_value) = self.show_entry(
                             id,
                             egui_id,
                             builder,
@@ -592,6 +607,10 @@ impl NbtTabViewer {
                                 ui.label("TODO: List element context menu");
                             },
                         );
+
+                        if let Some(new_value) = new_value {
+                            *value = new_value;
+                        }
                     },
                 )
             };
@@ -631,7 +650,7 @@ impl NbtTabViewer {
                                 builder,
                                 value,
                                 |id, egui_id, builder, idx, value| {
-                                    self.show_entry(
+                                    let (_, _, new_value) = self.show_entry(
                                         id,
                                         egui_id,
                                         builder,
@@ -648,6 +667,10 @@ impl NbtTabViewer {
                                             );
                                         },
                                     );
+
+                                    if let Some(new_value) = new_value {
+                                        *value = new_value;
+                                    }
                                 },
                             )
                         }
@@ -657,6 +680,8 @@ impl NbtTabViewer {
                 );
             }};
         }
+
+        let mut edit_value = None;
 
         match nbt {
             NbtList::Empty => unreachable!("This is a bug!"),
@@ -735,13 +760,16 @@ impl NbtTabViewer {
                         &self.icon_list,
                         &*self.translations.t(nbt_list_type_hint(value)),
                         |ui| {
-                            // TODO: List context menu (1)
-                            ui.label("TODO: List context menu (1)");
+                            if let Some(to_tag) = self
+                                .show_nbt_list_entry_context_menu_type_conversion(ui, value, false)
+                            {
+                                edit_value = Some(to_tag);
+                            }
                         },
                     );
 
                     if open {
-                        self.show_nbt_list(value, id, egui_id, builder);
+                        let _ = self.show_nbt_list(value, id, egui_id, builder);
                     }
 
                     builder.close_dir();
@@ -780,6 +808,312 @@ impl NbtTabViewer {
                 },
             ),
         }
+
+        edit_value
+    }
+
+    fn show_nbt_list_entry_context_menu_type_conversion(
+        &self,
+        ui: &mut Ui,
+        nbt: &mut NbtList,
+        can_conv_to_tag: bool,
+    ) -> Option<NbtTag> {
+        let mut new_value = None;
+        let mut convert_to_tag = None;
+
+        macro_rules! convs {
+            ($translation: expr, $convs: expr) => {{
+                ui.menu_button(&*self.translations.t($translation), $convs);
+            }};
+        }
+
+        macro_rules! simple_conv_to {
+            ($ui: ident, $vals: ident, $translation: expr, $variant: ident, $t: ident) => {{
+                if $ui.button(&*self.translations.t($translation)).clicked() {
+                    new_value = Some(NbtList::$variant($vals.iter().map(|e| *e as $t).collect()));
+                }
+            }};
+        }
+
+        macro_rules! array_to_array_conv {
+            ($ui: ident, $vals: ident, $translation: expr, $variant: ident, $t: ident) => {{
+                if $ui.button(&*self.translations.t($translation)).clicked() {
+                    new_value = Some(NbtList::$variant(
+                        $vals
+                            .iter()
+                            .map(|l| l.iter().map(|e| *e as $t).collect())
+                            .collect(),
+                    ));
+                }
+            }};
+        }
+
+        macro_rules! array_to_list_conv {
+            ($ui: ident, $vals: ident, $translation: expr, $variant: ident, $t: ident) => {{
+                if $ui.button(&*self.translations.t($translation)).clicked() {
+                    new_value = Some(NbtList::List(
+                        $vals
+                            .iter()
+                            .map(|l| NbtList::$variant(l.iter().map(|e| *e as $t).collect()))
+                            .collect(),
+                    ));
+                }
+            }};
+        }
+
+        macro_rules! list_list_to_array_conv {
+            ($ui: ident, $vals: ident, $translation: expr, $variant: ident, $t: ident) => {{
+                if $ui.button(&*self.translations.t($translation)).clicked() {
+                    new_value = Some(NbtList::$variant(
+                        $vals
+                            .iter()
+                            .map(|l| match l {
+                                NbtList::Byte(bs) => bs.iter().map(|e| *e as $t).collect(),
+                                NbtList::Short(shs) => shs.iter().map(|e| *e as $t).collect(),
+                                NbtList::Int(is) => is.iter().map(|e| *e as $t).collect(),
+                                NbtList::Long(ls) => ls.iter().map(|e| *e as $t).collect(),
+                                NbtList::Float(fs) => fs.iter().map(|e| *e as $t).collect(),
+                                NbtList::Double(ds) => ds.iter().map(|e| *e as $t).collect(),
+                                NbtList::String(strs) => strs
+                                    .iter()
+                                    .map(|e| $t::from_str(e.to_str().as_ref()).unwrap_or_default())
+                                    .collect(),
+                                _ => vec![],
+                            })
+                            .collect(),
+                    ));
+                }
+            }};
+        }
+
+        macro_rules! simple_conv_to_string {
+            ($ui: ident, $vals: ident) => {{
+                if $ui.button(&*self.translations.t("type-hint-str")).clicked() {
+                    new_value = Some(NbtList::String(
+                        $vals
+                            .iter()
+                            .map(|e| Mutf8String::from(e.to_string()))
+                            .collect(),
+                    ));
+                }
+            }};
+        }
+
+        macro_rules! simple_conv_from_string {
+            ($ui: ident, $vals: ident, $translation: expr, $variant: ident, $t: ident, $def: expr) => {{
+                $ui.menu_button(&*self.translations.t($translation), |ui| {
+                    if ui
+                        .button(&*self.translations.t("type-conv-abort-on-fail-text"))
+                        .clicked()
+                    {
+                        if let Ok(new_vals) = $vals
+                            .iter()
+                            .map(|e| $t::from_str(e.to_str().as_ref()))
+                            .collect::<Result<Vec<$t>, _>>()
+                        {
+                            new_value = Some(NbtList::$variant(new_vals));
+                        }
+                    }
+
+                    if ui
+                        .button(&self.translations.f(
+                            "type-conv-default-on-fail-text",
+                            &HashMap::from([("def".into(), $def.into())]),
+                        ))
+                        .clicked()
+                    {
+                        new_value = Some(NbtList::$variant(
+                            $vals
+                                .iter()
+                                .map(|e| $t::from_str(e.to_str().as_ref()).unwrap_or($def))
+                                .collect(),
+                        ));
+                    }
+                });
+            }};
+        }
+
+        macro_rules! simple_empty_conv_to {
+            ($ui: ident, $translation: expr, $variant: ident) => {
+                if $ui.button(&*self.translations.t($translation)).clicked() {
+                    new_value = Some(NbtList::$variant(vec![]));
+                }
+            };
+        }
+
+        macro_rules! conv_to_tag {
+            ($ui: ident, $vals: expr, $variant: ident) => {
+                if can_conv_to_tag
+                    && ui
+                        .button(&*self.translations.t("button-list-to-compound-conv"))
+                        .clicked()
+                {
+                    convert_to_tag = Some(NbtTag::Compound(NbtCompound::from_values(
+                        std::mem::take($vals)
+                            .into_iter()
+                            .enumerate()
+                            .map(|(idx, val)| {
+                                (Mutf8String::from(idx.to_string()), NbtTag::$variant(val))
+                            })
+                            .collect(),
+                    )));
+                }
+            };
+        }
+
+        match nbt {
+            NbtList::Empty => {
+                convs!("nbt-list-change-type", |ui| {
+                    simple_empty_conv_to!(ui, "type-hint-i8", Byte);
+                    simple_empty_conv_to!(ui, "type-hint-i16", Short);
+                    simple_empty_conv_to!(ui, "type-hint-i32", Int);
+                    simple_empty_conv_to!(ui, "type-hint-i64", Long);
+                    simple_empty_conv_to!(ui, "type-hint-f32", Float);
+                    simple_empty_conv_to!(ui, "type-hint-f64", Double);
+                    simple_empty_conv_to!(ui, "type-hint-str", String);
+                    simple_empty_conv_to!(ui, "type-hint-byte-array", ByteArray);
+                    simple_empty_conv_to!(ui, "type-hint-int-array", IntArray);
+                    simple_empty_conv_to!(ui, "type-hint-long-array", LongArray);
+                    simple_empty_conv_to!(ui, "type-hint-list", List);
+                    simple_empty_conv_to!(ui, "type-hint-compound", Compound);
+                });
+                let mut empty: [i8; 0] = [];
+                conv_to_tag!(ui, &mut empty, Byte);
+            }
+
+            NbtList::Byte(bs) => {
+                convs!("nbt-list-change-type", |ui| {
+                    conv_warn!(self.translations, ui);
+                    simple_conv_to!(ui, bs, "type-hint-i16", Short, i16);
+                    simple_conv_to!(ui, bs, "type-hint-i32", Int, i32);
+                    simple_conv_to!(ui, bs, "type-hint-i64", Long, i64);
+                    simple_conv_to!(ui, bs, "type-hint-f32", Float, f32);
+                    simple_conv_to!(ui, bs, "type-hint-f64", Double, f64);
+                    simple_conv_to_string!(ui, bs);
+                });
+                conv_to_tag!(ui, bs, Byte);
+            }
+            NbtList::Short(shs) => {
+                convs!("nbt-list-change-type", |ui| {
+                    conv_warn!(self.translations, ui);
+                    simple_conv_to!(ui, shs, "type-hint-i8", Byte, i8);
+                    simple_conv_to!(ui, shs, "type-hint-i32", Int, i32);
+                    simple_conv_to!(ui, shs, "type-hint-i64", Long, i64);
+                    simple_conv_to!(ui, shs, "type-hint-f32", Float, f32);
+                    simple_conv_to!(ui, shs, "type-hint-f64", Double, f64);
+                    simple_conv_to_string!(ui, shs);
+                });
+                conv_to_tag!(ui, shs, Short);
+            }
+            NbtList::Int(is) => {
+                convs!("nbt-list-change-type", |ui| {
+                    conv_warn!(self.translations, ui);
+                    simple_conv_to!(ui, is, "type-hint-i8", Byte, i8);
+                    simple_conv_to!(ui, is, "type-hint-i16", Short, i16);
+                    simple_conv_to!(ui, is, "type-hint-i64", Long, i64);
+                    simple_conv_to!(ui, is, "type-hint-f32", Float, f32);
+                    simple_conv_to!(ui, is, "type-hint-f64", Double, f64);
+                    simple_conv_to_string!(ui, is);
+                });
+                conv_to_tag!(ui, is, Int);
+            }
+            NbtList::Long(ls) => {
+                convs!("nbt-list-change-type", |ui| {
+                    conv_warn!(self.translations, ui);
+                    simple_conv_to!(ui, ls, "type-hint-i8", Byte, i8);
+                    simple_conv_to!(ui, ls, "type-hint-i16", Short, i16);
+                    simple_conv_to!(ui, ls, "type-hint-i32", Int, i32);
+                    simple_conv_to!(ui, ls, "type-hint-f32", Float, f32);
+                    simple_conv_to!(ui, ls, "type-hint-f64", Double, f64);
+                    simple_conv_to_string!(ui, ls);
+                });
+                conv_to_tag!(ui, ls, Long);
+            }
+            NbtList::Float(fs) => {
+                convs!("nbt-list-change-type", |ui| {
+                    conv_warn!(self.translations, ui);
+                    simple_conv_to!(ui, fs, "type-hint-i8", Byte, i8);
+                    simple_conv_to!(ui, fs, "type-hint-i16", Short, i16);
+                    simple_conv_to!(ui, fs, "type-hint-i32", Int, i32);
+                    simple_conv_to!(ui, fs, "type-hint-i64", Long, i64);
+                    simple_conv_to!(ui, fs, "type-hint-f64", Double, f64);
+                    simple_conv_to_string!(ui, fs);
+                });
+                conv_to_tag!(ui, fs, Float);
+            }
+            NbtList::Double(ds) => {
+                convs!("nbt-list-change-type", |ui| {
+                    conv_warn!(self.translations, ui);
+                    simple_conv_to!(ui, ds, "type-hint-i8", Byte, i8);
+                    simple_conv_to!(ui, ds, "type-hint-i16", Short, i16);
+                    simple_conv_to!(ui, ds, "type-hint-i32", Int, i32);
+                    simple_conv_to!(ui, ds, "type-hint-i64", Long, i64);
+                    simple_conv_to!(ui, ds, "type-hint-f32", Float, f32);
+                    simple_conv_to_string!(ui, ds);
+                });
+                conv_to_tag!(ui, ds, Double);
+            }
+            NbtList::String(strs) => {
+                convs!("nbt-list-change-type", |ui| {
+                    conv_warn!(self.translations, ui);
+                    simple_conv_from_string!(ui, strs, "type-hint-i8", Byte, i8, 0);
+                    simple_conv_from_string!(ui, strs, "type-hint-i16", Short, i16, 0);
+                    simple_conv_from_string!(ui, strs, "type-hint-i32", Int, i32, 0);
+                    simple_conv_from_string!(ui, strs, "type-hint-i64", Long, i64, 0);
+                    simple_conv_from_string!(ui, strs, "type-hint-f32", Float, f32, f32::NAN);
+                    simple_conv_from_string!(ui, strs, "type-hint-f64", Double, f64, f64::NAN);
+                });
+                conv_to_tag!(ui, strs, String);
+            }
+
+            NbtList::ByteArray(bas) => {
+                convs!("nbt-list-change-type", |ui| {
+                    conv_warn!(self.translations, ui);
+                    array_to_array_conv!(ui, bas, "type-hint-int-array", IntArray, i32);
+                    array_to_array_conv!(ui, bas, "type-hint-long-array", LongArray, i64);
+                    array_to_list_conv!(ui, bas, "type-hint-list", Byte, i8);
+                });
+                conv_to_tag!(ui, bas, ByteArray);
+            }
+            NbtList::IntArray(ias) => {
+                convs!("nbt-list-change-type", |ui| {
+                    conv_warn!(self.translations, ui);
+                    array_to_array_conv!(ui, ias, "type-hint-byte-array", ByteArray, u8);
+                    array_to_array_conv!(ui, ias, "type-hint-long-array", LongArray, i64);
+                    array_to_list_conv!(ui, ias, "type-hint-list", Int, i32);
+                });
+                conv_to_tag!(ui, ias, IntArray);
+            }
+            NbtList::LongArray(las) => {
+                convs!("nbt-list-change-type", |ui| {
+                    conv_warn!(self.translations, ui);
+                    array_to_array_conv!(ui, las, "type-hint-byte-array", ByteArray, u8);
+                    array_to_array_conv!(ui, las, "type-hint-int-array", IntArray, i32);
+                    array_to_list_conv!(ui, las, "type-hint-list", Long, i64);
+                });
+                conv_to_tag!(ui, las, LongArray);
+            }
+
+            NbtList::List(ls) => {
+                convs!("nbt-list-try-change-type", |ui| {
+                    conv_warn!(self.translations, ui);
+                    list_list_to_array_conv!(ui, ls, "type-hint-byte-array", ByteArray, u8);
+                    list_list_to_array_conv!(ui, ls, "type-hint-int-array", IntArray, i32);
+                    list_list_to_array_conv!(ui, ls, "type-hint-long-array", LongArray, i64);
+                });
+                conv_to_tag!(ui, ls, List);
+            }
+
+            NbtList::Compound(cs) => {
+                conv_to_tag!(ui, cs, Compound);
+            }
+        }
+
+        if let Some(new_value) = new_value {
+            *nbt = new_value;
+        }
+
+        convert_to_tag
     }
 
     fn show_compound_tree(
@@ -1133,8 +1467,11 @@ impl NbtTabViewer {
                         &self.icon_list,
                         &*self.translations.t(nbt_list_type_hint(l)),
                         |ui| {
-                            // TODO: List context menu (2)
-                            ui.label("List context menu (2)");
+                            if let Some(n_value) =
+                                self.show_nbt_list_entry_context_menu_type_conversion(ui, l, true)
+                            {
+                                update_type = Some(n_value);
+                            }
                         },
                     );
 

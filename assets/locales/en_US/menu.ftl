@@ -28,6 +28,12 @@ editable-value-empty-text = Empty value
 empty-list-text = Empty list
 compound-simple-value-change-type = Change value type to
 compound-simple-value-try-parse = Try parsing value as
+nbt-list-change-type = Change type to list of
+nbt-list-try-change-type = Try to change type to list of
+dt-conv-warn = Warning: You may lose information by converting to smaller datatypes, or converting to and from floating point numbers or strings.
+type-conv-abort-on-fail-text = Abort on conversion fail
+type-conv-default-on-fail-text = Use default value ({$def}) on conversion fail
+button-list-to-compound-conv = Convert to NBT Compound
 
 list-element-count = [{$count} {$count ->
     [1] element
@@ -47,6 +53,7 @@ type-hint-i64 = Long
 type-hint-f32 = Float
 type-hint-f64 = Double
 type-hint-str = UTF-8 String
+type-hint-list = List
 type-hint-compound = NBT Compound
 type-hint-byte-array = Byte Array
 type-hint-int-array = Int Array
