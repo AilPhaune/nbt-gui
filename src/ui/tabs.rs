@@ -1,4 +1,4 @@
-use std::{collections::HashMap, path::PathBuf, sync::Arc};
+use std::{collections::HashMap, path::PathBuf, str::FromStr, sync::Arc};
 
 use anyhow::{Context, anyhow};
 use egui::{FontFamily, Id, Key, Label, RichText, Sense, Spinner, Stroke, TextEdit, Ui, Widget};
@@ -17,26 +17,26 @@ use crate::{
 };
 
 pub trait NbtValue: Sized + 'static {
-    fn from_str(s: String) -> Result<Self, ()>;
-    fn to_str(&self) -> String;
+    fn nbt_from_str(s: String) -> Result<Self, ()>;
+    fn nbt_to_str(&self) -> String;
 }
 
 impl NbtValue for Mutf8String {
-    fn from_str(s: String) -> Result<Self, ()> {
+    fn nbt_from_str(s: String) -> Result<Self, ()> {
         Ok(Mutf8String::from_string(s))
     }
 
-    fn to_str(&self) -> String {
+    fn nbt_to_str(&self) -> String {
         self.to_string()
     }
 }
 
 impl NbtValue for () {
-    fn from_str(_: String) -> Result<Self, ()> {
+    fn nbt_from_str(_: String) -> Result<Self, ()> {
         Ok(())
     }
 
-    fn to_str(&self) -> String {
+    fn nbt_to_str(&self) -> String {
         String::new()
     }
 }
@@ -44,11 +44,11 @@ impl NbtValue for () {
 macro_rules! impl_fromstr2 {
     ($($t:ty),*) => {
         $(impl NbtValue for $t {
-            fn from_str(s: String) -> Result<Self, ()> {
+            fn nbt_from_str(s: String) -> Result<Self, ()> {
                 s.parse().map_err(|_| ())
             }
 
-            fn to_str(&self) -> String {
+            fn nbt_to_str(&self) -> String {
                 self.to_string()
             }
         })*
@@ -56,6 +56,30 @@ macro_rules! impl_fromstr2 {
 }
 
 impl_fromstr2!(i8, u8, i16, i32, i64, f32, f64, bool);
+
+pub trait NbtValueTo<T> {
+    fn to(self) -> T;
+}
+
+impl<'a, S, D> NbtValueTo<D> for &'a S
+where
+    D: TryFrom<S> + Default,
+    S: Copy,
+{
+    fn to(self) -> D {
+        D::try_from(*self).unwrap_or_default()
+    }
+}
+
+impl<'a, S, D> NbtValueTo<D> for &'a mut S
+where
+    D: TryFrom<S> + Default,
+    S: Copy,
+{
+    fn to(self) -> D {
+        D::try_from(*self).unwrap_or_default()
+    }
+}
 
 pub enum TabEvent {
     OpenNewFileTab {
@@ -438,77 +462,86 @@ impl NbtTabViewer {
         id: &NbtNodeId,
         egui_id: Id,
         builder: &mut TreeViewBuilder<NbtNodeId>,
-        mut val: Option<&mut T>,
+        val: Option<&T>,
         key: Option<&str>,
         idx: Option<usize>,
         extra: Option<&str>,
         icon: &(char, FontFamily),
         type_hint: &str,
-    ) -> (bool, Option<String>) {
+        context_menu: impl FnMut(&mut Ui),
+    ) -> (bool, Option<String>, Option<T>) {
         let mut ret = None;
+        let mut ret_new_val = None;
 
         let node_base = match val {
             Some(_) => NodeBuilder::leaf(id.clone()),
             None => NodeBuilder::dir(id.clone()).default_open(false),
         };
 
-        let open = builder.node(node_base.label_ui(|ui| {
-            ui.horizontal(|ui| {
-                Label::new(
-                    RichText::new(icon.0)
-                        .family(icon.1.clone())
-                        .color(ui.visuals().text_color()),
-                )
-                .sense(Sense::empty())
-                .selectable(false)
-                .show_tooltip_when_elided(false)
-                .ui(ui);
-
-                if let Some(key) = key {
-                    ret = Self::editable_str_label(
-                        ui,
-                        egui_id.with("editable-key"),
-                        key,
-                        &*self.translations.t("editable-key-empty-text"),
-                    )
-                    .and_then(|s| if s.trim().is_empty() { None } else { Some(s) })
-                }
-
-                if let Some(idx) = idx {
-                    Label::new(RichText::new(idx.to_string()).color(ui.visuals().text_color()))
-                        .sense(Sense::empty())
-                        .show_tooltip_when_elided(false)
-                        .ui(ui);
-                }
-
-                if let Some(val) = &mut val {
-                    Label::new(RichText::new(":").color(ui.visuals().text_color()))
+        let open = builder.node(
+            node_base
+                .label_ui(|ui| {
+                    ui.horizontal(|ui| {
+                        Label::new(
+                            RichText::new(icon.0)
+                                .family(icon.1.clone())
+                                .color(ui.visuals().text_color()),
+                        )
                         .sense(Sense::empty())
                         .selectable(false)
                         .show_tooltip_when_elided(false)
                         .ui(ui);
 
-                    if let Some(new_val) = Self::editable_str_label(
-                        ui,
-                        egui_id.with("editable-value"),
-                        &val.to_str(),
-                        &*self.translations.t("editable-value-empty-text"),
-                    ) && let Ok(parsed) = T::from_str(new_val)
-                    {
-                        **val = parsed;
-                    }
-                }
+                        if let Some(key) = key {
+                            ret = Self::editable_str_label(
+                                ui,
+                                egui_id.with("editable-key"),
+                                key,
+                                &*self.translations.t("editable-key-empty-text"),
+                            )
+                            .and_then(|s| if s.trim().is_empty() { None } else { Some(s) })
+                        }
 
-                if let Some(extra) = extra {
-                    Label::new(RichText::new(extra).color(ui.visuals().text_color())).ui(ui);
-                }
-            })
-            .response
-            .interact(Sense::hover())
-            .on_hover_text(type_hint);
-        }));
+                        if let Some(idx) = idx {
+                            Label::new(
+                                RichText::new(idx.to_string()).color(ui.visuals().text_color()),
+                            )
+                            .sense(Sense::empty())
+                            .show_tooltip_when_elided(false)
+                            .ui(ui);
+                        }
 
-        (open, ret)
+                        if let Some(val) = val {
+                            Label::new(RichText::new(":").color(ui.visuals().text_color()))
+                                .sense(Sense::empty())
+                                .selectable(false)
+                                .show_tooltip_when_elided(false)
+                                .ui(ui);
+
+                            if let Some(new_val) = Self::editable_str_label(
+                                ui,
+                                egui_id.with("editable-value"),
+                                &val.nbt_to_str(),
+                                &*self.translations.t("editable-value-empty-text"),
+                            ) && let Ok(parsed) = T::nbt_from_str(new_val)
+                            {
+                                ret_new_val = Some(parsed);
+                            }
+                        }
+
+                        if let Some(extra) = extra {
+                            Label::new(RichText::new(extra).color(ui.visuals().text_color()))
+                                .ui(ui);
+                        }
+                    })
+                    .response
+                    .interact(Sense::hover())
+                    .on_hover_text(type_hint);
+                })
+                .context_menu(context_menu),
+        );
+
+        (open, ret, ret_new_val)
     }
 
     fn show_list<T>(
@@ -554,6 +587,10 @@ impl NbtTabViewer {
                             None,
                             $icon,
                             &*self.translations.t($th),
+                            |ui| {
+                                // TODO: List element context menu
+                                ui.label("TODO: List element context menu");
+                            },
                         );
                     },
                 )
@@ -568,7 +605,7 @@ impl NbtTabViewer {
                     builder,
                     $values,
                     |id, egui_id, builder, idx, value| {
-                        let (open, _) = self.show_entry::<()>(
+                        let (open, _, _) = self.show_entry::<()>(
                             id,
                             egui_id,
                             builder,
@@ -581,6 +618,10 @@ impl NbtTabViewer {
                             )),
                             &self.icon_array,
                             &*self.translations.t($th),
+                            |ui| {
+                                // TODO: List of arrays subarray context menu
+                                ui.label("TODO: List of arrays subarray context menu");
+                            },
                         );
 
                         if open {
@@ -600,6 +641,12 @@ impl NbtTabViewer {
                                         None,
                                         &self.icon_numeric,
                                         &*self.translations.t($th_elem),
+                                        |ui| {
+                                            // TODO: List of arrays subelement context menu
+                                            ui.label(
+                                                "TODO: List of arrays subelement context menu",
+                                            );
+                                        },
                                     );
                                 },
                             )
@@ -674,7 +721,7 @@ impl NbtTabViewer {
                         return;
                     }
 
-                    let (open, _) = self.show_entry::<()>(
+                    let (open, _, _) = self.show_entry::<()>(
                         id,
                         egui_id,
                         builder,
@@ -687,6 +734,10 @@ impl NbtTabViewer {
                         )),
                         &self.icon_list,
                         &*self.translations.t(nbt_list_type_hint(value)),
+                        |ui| {
+                            // TODO: List context menu (1)
+                            ui.label("TODO: List context menu (1)");
+                        },
                     );
 
                     if open {
@@ -702,7 +753,7 @@ impl NbtTabViewer {
                 builder,
                 cs,
                 |id, egui_id, builder, idx, value| {
-                    let (open, _) = self.show_entry::<()>(
+                    let (open, _, _) = self.show_entry::<()>(
                         id,
                         egui_id,
                         builder,
@@ -715,6 +766,10 @@ impl NbtTabViewer {
                         )),
                         &self.icon_compound_nbt,
                         &*self.translations.t("type-hint-compound"),
+                        |ui| {
+                            // TODO: Compound in list context menu
+                            ui.label("TODDO: Compound in list context menu");
+                        },
                     );
 
                     if open {
@@ -739,29 +794,34 @@ impl NbtTabViewer {
             id.push(idx as u32);
             let egui_id = egui_id.with(idx);
 
+            let mut update_type = None;
+
             macro_rules! simple_view_value {
-                ($value: ident, $icon: expr, $th: expr) => {{
-                    edit = self
-                        .show_entry(
-                            id,
-                            egui_id,
-                            builder,
-                            Some($value),
-                            Some(key.to_str().as_ref()),
-                            None,
-                            None,
-                            $icon,
-                            &*self.translations.t($th),
-                        )
-                        .1
-                        .map(|s| (idx, s))
-                        .or(edit);
+                ($value: ident, $icon: expr, $th: expr, $ctx_menu: expr) => {{
+                    let (_, m_edit, new_value) = self.show_entry(
+                        id,
+                        egui_id,
+                        builder,
+                        Some($value),
+                        Some(key.to_str().as_ref()),
+                        None,
+                        None,
+                        $icon,
+                        &*self.translations.t($th),
+                        $ctx_menu,
+                    );
+
+                    edit = m_edit.map(|s| (idx, s)).or(edit);
+
+                    if let Some(new_value) = new_value {
+                        *$value = new_value;
+                    }
                 }};
             }
 
             macro_rules! simple_view_list {
                 ($values: ident, $icon: expr, $th: expr, $th_elem: expr) => {{
-                    let (open, m_edit) = self.show_entry::<()>(
+                    let (open, m_edit, _) = self.show_entry::<()>(
                         id,
                         egui_id,
                         builder,
@@ -774,6 +834,10 @@ impl NbtTabViewer {
                         )),
                         &self.icon_array,
                         &*self.translations.t($th),
+                        |ui| {
+                            // TODO: Array in compound context menu
+                            ui.label("TODO: Array in compound context menu");
+                        },
                     );
 
                     edit = m_edit.map(|s| (idx, s)).or(edit);
@@ -785,7 +849,7 @@ impl NbtTabViewer {
                             builder,
                             $values,
                             |id, egui_id, builder, idx, value| {
-                                self.show_entry(
+                                let (_, _, new_value) = self.show_entry(
                                     id,
                                     egui_id,
                                     builder,
@@ -795,7 +859,15 @@ impl NbtTabViewer {
                                     None,
                                     $icon,
                                     &*self.translations.t($th_elem),
+                                    |ui| {
+                                        // TODO: Array element context menu
+                                        ui.label("TODO: Array element context menu");
+                                    },
                                 );
+
+                                if let Some(new_value) = new_value {
+                                    *value = new_value;
+                                }
                             },
                         );
                     }
@@ -804,14 +876,144 @@ impl NbtTabViewer {
                 }};
             }
 
+            macro_rules! convert_to {
+                ($ui: ident, $v: ident, $th: expr, $variant: ident, $t: ident) => {{
+                    if $ui.button(&*self.translations.t($th)).clicked() {
+                        update_type = Some(NbtTag::$variant($v as $t));
+                    }
+                }};
+            }
+
+            macro_rules! convert_from_string {
+                ($ui: ident, $v: expr, $th: expr, $variant: ident, $t: ident) => {{
+                    if $ui.button(&*self.translations.t($th)).clicked() {
+                        if let Ok(n_value) = $t::from_str(&$v) {
+                            update_type = Some(NbtTag::$variant(n_value));
+                        }
+                    }
+                }};
+            }
+
+            macro_rules! convert_to_string {
+                ($ui: ident, $v: ident) => {
+                    if $ui.button(&*self.translations.t("type-hint-str")).clicked() {
+                        update_type = Some(NbtTag::String(Mutf8String::from($v.to_string())));
+                    }
+                };
+            }
+
             match tag {
-                NbtTag::Byte(b) => simple_view_value!(b, &self.icon_numeric, "type-hint-i8"),
-                NbtTag::Short(s) => simple_view_value!(s, &self.icon_numeric, "type-hint-i16"),
-                NbtTag::Int(i) => simple_view_value!(i, &self.icon_numeric, "type-hint-i32"),
-                NbtTag::Long(l) => simple_view_value!(l, &self.icon_numeric, "type-hint-i64"),
-                NbtTag::Float(f) => simple_view_value!(f, &self.icon_numeric, "type-hint-f32"),
-                NbtTag::Double(d) => simple_view_value!(d, &self.icon_numeric, "type-hint-f64"),
-                NbtTag::String(s) => simple_view_value!(s, &self.icon_string, "type-hint-str"),
+                NbtTag::Byte(b) => {
+                    let cb = *b;
+                    simple_view_value!(b, &self.icon_numeric, "type-hint-i8", |ui| {
+                        ui.menu_button(
+                            &*self.translations.t("compound-simple-value-change-type"),
+                            |ui| {
+                                convert_to!(ui, cb, "type-hint-i16", Short, i16);
+                                convert_to!(ui, cb, "type-hint-i32", Int, i32);
+                                convert_to!(ui, cb, "type-hint-i64", Long, i64);
+                                convert_to!(ui, cb, "type-hint-f32", Float, f32);
+                                convert_to!(ui, cb, "type-hint-f64", Double, f64);
+                                convert_to_string!(ui, cb);
+                            },
+                        );
+                    })
+                }
+                NbtTag::Short(s) => {
+                    let cs = *s;
+                    simple_view_value!(s, &self.icon_numeric, "type-hint-i16", |ui| {
+                        ui.menu_button(
+                            &*self.translations.t("compound-simple-value-change-type"),
+                            |ui| {
+                                convert_to!(ui, cs, "type-hint-i8", Byte, i8);
+                                convert_to!(ui, cs, "type-hint-i32", Int, i32);
+                                convert_to!(ui, cs, "type-hint-i64", Long, i64);
+                                convert_to!(ui, cs, "type-hint-f32", Float, f32);
+                                convert_to!(ui, cs, "type-hint-f64", Double, f64);
+                                convert_to_string!(ui, cs);
+                            },
+                        );
+                    })
+                }
+                NbtTag::Int(i) => {
+                    let ci = *i;
+                    simple_view_value!(i, &self.icon_numeric, "type-hint-i32", |ui| {
+                        ui.menu_button(
+                            &*self.translations.t("compound-simple-value-change-type"),
+                            |ui| {
+                                convert_to!(ui, ci, "type-hint-i8", Byte, i8);
+                                convert_to!(ui, ci, "type-hint-i16", Short, i16);
+                                convert_to!(ui, ci, "type-hint-i64", Long, i64);
+                                convert_to!(ui, ci, "type-hint-f32", Float, f32);
+                                convert_to!(ui, ci, "type-hint-f64", Double, f64);
+                                convert_to_string!(ui, ci);
+                            },
+                        );
+                    })
+                }
+                NbtTag::Long(l) => {
+                    let cl = *l;
+                    simple_view_value!(l, &self.icon_numeric, "type-hint-i64", |ui| {
+                        ui.menu_button(
+                            &*self.translations.t("compound-simple-value-change-type"),
+                            |ui| {
+                                convert_to!(ui, cl, "type-hint-i8", Byte, i8);
+                                convert_to!(ui, cl, "type-hint-i16", Short, i16);
+                                convert_to!(ui, cl, "type-hint-i32", Int, i32);
+                                convert_to!(ui, cl, "type-hint-f32", Float, f32);
+                                convert_to!(ui, cl, "type-hint-f64", Double, f64);
+                                convert_to_string!(ui, cl);
+                            },
+                        );
+                    })
+                }
+                NbtTag::Float(f) => {
+                    let cf = *f;
+                    simple_view_value!(f, &self.icon_numeric, "type-hint-f32", |ui| {
+                        ui.menu_button(
+                            &*self.translations.t("compound-simple-value-change-type"),
+                            |ui| {
+                                convert_to!(ui, cf, "type-hint-i8", Byte, i8);
+                                convert_to!(ui, cf, "type-hint-i16", Short, i16);
+                                convert_to!(ui, cf, "type-hint-i32", Int, i32);
+                                convert_to!(ui, cf, "type-hint-i64", Long, i64);
+                                convert_to!(ui, cf, "type-hint-f64", Double, f64);
+                                convert_to_string!(ui, cf);
+                            },
+                        );
+                    })
+                }
+                NbtTag::Double(d) => {
+                    let cd = *d;
+                    simple_view_value!(d, &self.icon_numeric, "type-hint-f64", |ui| {
+                        ui.menu_button(
+                            &*self.translations.t("compound-simple-value-change-type"),
+                            |ui| {
+                                convert_to!(ui, cd, "type-hint-i8", Byte, i8);
+                                convert_to!(ui, cd, "type-hint-i16", Short, i16);
+                                convert_to!(ui, cd, "type-hint-i32", Int, i32);
+                                convert_to!(ui, cd, "type-hint-i64", Long, i64);
+                                convert_to!(ui, cd, "type-hint-f32", Float, f32);
+                                convert_to_string!(ui, cd);
+                            },
+                        );
+                    })
+                }
+                NbtTag::String(s) => {
+                    simple_view_value!(s, &self.icon_string, "type-hint-str", |ui| {
+                        ui.menu_button(
+                            &*self.translations.t("compound-simple-value-try-parse"),
+                            |ui| {
+                                convert_from_string!(ui, s.to_str(), "type-hint-i8", Byte, i8);
+                                convert_from_string!(ui, s.to_str(), "type-hint-i16", Short, i16);
+                                convert_from_string!(ui, s.to_str(), "type-hint-i32", Int, i32);
+                                convert_from_string!(ui, s.to_str(), "type-hint-i64", Long, i64);
+                                convert_from_string!(ui, s.to_str(), "type-hint-f32", Float, f32);
+                                convert_from_string!(ui, s.to_str(), "type-hint-f64", Double, f64);
+                            },
+                        );
+                    })
+                }
 
                 NbtTag::ByteArray(ba) => {
                     simple_view_list!(
@@ -839,7 +1041,7 @@ impl NbtTabViewer {
                 }
 
                 NbtTag::Compound(c) => {
-                    let (open, m_edit) = self.show_entry::<()>(
+                    let (open, m_edit, _) = self.show_entry::<()>(
                         id,
                         egui_id,
                         builder,
@@ -852,6 +1054,10 @@ impl NbtTabViewer {
                         )),
                         &self.icon_compound_nbt,
                         &*self.translations.t("type-hint-compound"),
+                        |ui| {
+                            // TODO: Compound in compound context menu
+                            ui.label("TODO: Compound in compound context menu");
+                        },
                     );
 
                     edit = m_edit.map(|s| (idx, s)).or(edit);
@@ -913,7 +1119,7 @@ impl NbtTabViewer {
                         continue;
                     }
 
-                    let (open, m_edit) = self.show_entry::<()>(
+                    let (open, m_edit, _) = self.show_entry::<()>(
                         id,
                         egui_id,
                         builder,
@@ -926,6 +1132,10 @@ impl NbtTabViewer {
                         )),
                         &self.icon_list,
                         &*self.translations.t(nbt_list_type_hint(l)),
+                        |ui| {
+                            // TODO: List context menu (2)
+                            ui.label("List context menu (2)");
+                        },
                     );
 
                     edit = m_edit.map(|s| (idx, s)).or(edit);
@@ -936,6 +1146,10 @@ impl NbtTabViewer {
 
                     builder.close_dir();
                 }
+            }
+
+            if let Some(update_type) = update_type {
+                *tag = update_type;
             }
 
             id.pop();

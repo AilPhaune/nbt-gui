@@ -26,6 +26,8 @@ unnamed-root-nbt-text-hint = Unnamed NBT root
 editable-key-empty-text = Empty key
 editable-value-empty-text = Empty value
 empty-list-text = Empty list
+compound-simple-value-change-type = Change value type to
+compound-simple-value-try-parse = Try parsing value as
 
 list-element-count = [{$count} {$count ->
     [1] element
