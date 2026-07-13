@@ -1,0 +1,27 @@
+[package]
+name = "nbt-gui"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
+eframe = "0.35.0"
+egui = "0.35.0"
+egui_dock = "0.20.1"
+egui_ltreeview = "0.8.0"
+iconflow = { version = "1.0", features = ["pack-lucide"] }
+fluent = "0.17.0"
+fluent-templates = "0.14.0"
+futures = "0.3.32"
+mca = "2.1.2"
+rayon = "1.12.0"
+rfd = "0.17.2"
+# simdnbt = "0.10.0"
+simdnbt = { git = "https://github.com/AilPhaune/simdnbt", branch = "master" }
+unic-langid = "0.9.6"
+anyhow = "1.0.103"
+smallvec = "1.15.2"
+flate2 = "1.1.9"
+lz4_flex = "0.13.1"
+thiserror = "2.0.18"
+parking_lot = "0.12.5"
