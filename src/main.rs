@@ -1,4 +1,5 @@
 pub mod app;
+pub mod examples;
 pub mod i18n;
 pub mod ui;
 
@@ -16,7 +17,7 @@ fn main() -> eframe::Result<()> {
     let translations = Arc::new(Translations::load(unic_langid::langid!("en-US")).unwrap());
 
     eframe::run_native(
-        &translations.t("app-title"),
+        &translations.c().app_title,
         options,
         Box::new(|cc| {
             let mut definitions = FontDefinitions::default();
@@ -33,7 +34,9 @@ fn main() -> eframe::Result<()> {
             }
             cc.egui_ctx.set_fonts(definitions);
 
-            Ok(Box::new(NbtEditorApplication::new(translations).unwrap()))
+            Ok(Box::new(
+                NbtEditorApplication::new(Arc::clone(&translations)).unwrap(),
+            ))
         }),
     )
 }

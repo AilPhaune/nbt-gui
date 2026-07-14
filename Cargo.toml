@@ -1,7 +1,15 @@
+cargo-features = ["profile-rustflags"]
+
 [package]
 name = "nbt-gui"
 version = "0.1.0"
 edition = "2024"
+
+[profile.profiling]
+inherits = "release"
+debug = 2
+strip = false
+rustflags = ["-C", "force-frame-pointers=yes"]
 
 [dependencies]
 tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
@@ -22,6 +30,6 @@ unic-langid = "0.9.6"
 anyhow = "1.0.103"
 smallvec = "1.15.2"
 flate2 = "1.1.9"
-lz4_flex = "0.13.1"
+lz4_flex = "0.14"
 thiserror = "2.0.18"
 parking_lot = "0.12.5"

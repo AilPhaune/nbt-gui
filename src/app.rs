@@ -9,6 +9,7 @@ use std::{collections::HashMap, sync::Arc};
 use tokio::runtime::Runtime;
 
 use crate::{
+    examples,
     i18n::Translations,
     ui::{
         document::{DocumentData, NbtDocumentTab},
@@ -60,12 +61,15 @@ impl NbtEditorApplication {
         });
     }
 
-    fn open_test_nbt(&mut self) {
+    fn open_document(&mut self, data: DocumentData) -> Result<(), DocumentData> {
         let mut tab =
-            NbtDocumentTab::new_titled(String::clone(&self.translations.t("title-test-nbt")));
-        tab.data = DocumentData::example_nbt();
+            NbtDocumentTab::new_titled(String::clone(&self.translations.c().title_test_nbt));
         if self.tab_viewer.insert(&mut tab) {
+            tab.data = data;
             self.dock_state.push_to_focused_leaf(tab);
+            Ok(())
+        } else {
+            Err(data)
         }
     }
 
@@ -90,29 +94,40 @@ impl NbtEditorApplication {
 
 impl App for NbtEditorApplication {
     fn ui(&mut self, ui: &mut Ui, _frame: &mut Frame) {
+        let translations = Arc::clone(self.translations.c());
+
         MenuBar::new().ui(ui, |ui| {
             ui.horizontal(|ui| {
-                ui.menu_button(&*self.translations.t("menu-file"), |ui| {
-                    if ui.button(&*self.translations.t("menu-file-new")).clicked() {
+                ui.menu_button(&translations.menu_file, |ui| {
+                    if ui.button(&translations.menu_file_new).clicked() {
                         self.new_untitled_file();
                     }
 
                     ui.separator();
 
-                    if ui
-                        .button(&*self.translations.t("menu-file-open-test-nbt"))
-                        .clicked()
-                    {
-                        self.open_test_nbt();
-                    }
+                    ui.menu_button(&translations.menu_file_open_test_nbt, |ui| {
+                        if ui
+                            .button(&translations.menu_file_open_test_nbt_simple)
+                            .clicked()
+                        {
+                            let _ = self.open_document(examples::example_nbt());
+                        }
 
-                    if ui.button(&*self.translations.t("menu-file-open")).clicked() {
+                        if ui
+                            .button(&*translations.menu_file_open_test_nbt_huge)
+                            .clicked()
+                        {
+                            let _ = self.open_document(examples::example_nbt_huge());
+                        }
+                    });
+
+                    if ui.button(&*translations.menu_file_open).clicked() {
                         self.open_files();
                     }
 
                     ui.separator();
 
-                    if ui.button(&*self.translations.t("menu-file-save")).clicked()
+                    if ui.button(&*translations.menu_file_save).clicked()
                         && let Some((_rect, tab)) = self.dock_state.find_active_focused()
                     {
                         let tab_id = tab.tab_id;
@@ -132,9 +147,7 @@ impl App for NbtEditorApplication {
                         });
                     }
 
-                    if ui
-                        .button(&*self.translations.t("menu-file-save-as"))
-                        .clicked()
+                    if ui.button(&*translations.menu_file_save_as).clicked()
                         && let Some((_rect, tab)) = self.dock_state.find_active_focused()
                     {
                         let tab_id = tab.tab_id;
@@ -154,14 +167,14 @@ impl App for NbtEditorApplication {
                         });
                     }
 
-                    if ui.button(&*self.translations.t("menu-file-exit")).clicked() {
+                    if ui.button(&*translations.menu_file_exit).clicked() {
                         ui.ctx().send_viewport_cmd(ViewportCommand::Close);
                     }
                 })
             });
 
-            ui.menu_button(&*self.translations.t("menu-preferences"), |ui| {
-                ui.menu_button(&*self.translations.t("menu-preferences-zoom"), |ui| {
+            ui.menu_button(&*translations.menu_preferences, |ui| {
+                ui.menu_button(&*translations.menu_preferences_zoom, |ui| {
                     ScrollArea::vertical().show(ui, |ui| {
                         for size in [25, 33, 50, 75, 100, 125, 150, 175, 200, 300, 400, 500] {
                             if ui
@@ -186,10 +199,7 @@ impl App for NbtEditorApplication {
                                 })
                                 .integer()
                                 .ui(ui);
-                            if ui
-                                .button(&*self.translations.t("button-confirm-text"))
-                                .clicked()
-                            {
+                            if ui.button(&*translations.button_confirm_text).clicked() {
                                 self.scale = (self.scale_slider as f64) * 0.01;
                             }
                         });
@@ -203,7 +213,7 @@ impl App for NbtEditorApplication {
             let mut close = false;
 
             Modal::new(format!("error_dialog_{i}").into()).show(ui, |ui| {
-                ui.heading(&*self.translations.t("dialog-error"));
+                ui.heading(&*translations.dialog_error);
                 ui.separator();
 
                 ui.label(format!("{:?}", err));
@@ -231,7 +241,7 @@ impl App for NbtEditorApplication {
             match event {
                 TabEvent::OpenNewTab => {
                     let mut tab = NbtDocumentTab::new_titled(String::clone(
-                        &self.translations.t("title-untitled"),
+                        &self.translations.c().title_untitled,
                     ));
                     if self.tab_viewer.insert(&mut tab) {
                         self.dock_state.push_to_focused_leaf(tab);
