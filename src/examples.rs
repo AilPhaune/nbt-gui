@@ -284,11 +284,65 @@ pub fn example_nbt_huge() -> DocumentData {
                 ),
                 (
                     "huge_compounds".into(),
-                    NbtTag::Compound(NbtCompound::from_values(vec![])),
+                    NbtTag::Compound(NbtCompound::from_values(vec![
+                        (
+                            "huge_1k_b".into(),
+                            NbtTag::Compound(NbtCompound::from_values(
+                                (0i32..1_000i32)
+                                    .map(|i| (i.to_string().into(), NbtTag::Int(i)))
+                                    .collect(),
+                            )),
+                        ),
+                        (
+                            "huge_10k_b".into(),
+                            NbtTag::Compound(NbtCompound::from_values(
+                                (0i32..10_000i32)
+                                    .map(|i| (i.to_string().into(), NbtTag::Int(i)))
+                                    .collect(),
+                            )),
+                        ),
+                        (
+                            "huge_100k_b".into(),
+                            NbtTag::Compound(NbtCompound::from_values(
+                                (0i32..100_000i32)
+                                    .map(|i| (i.to_string().into(), NbtTag::Int(i)))
+                                    .collect(),
+                            )),
+                        ),
+                        (
+                            "huge_1M_b".into(),
+                            NbtTag::Compound(NbtCompound::from_values(
+                                (0i32..1_000_000i32)
+                                    .map(|i| (i.to_string().into(), NbtTag::Int(i)))
+                                    .collect(),
+                            )),
+                        ),
+                        (
+                            "huge_10M_b".into(),
+                            NbtTag::Compound(NbtCompound::from_values(
+                                (0i32..10_000_000i32)
+                                    .map(|i| (i.to_string().into(), NbtTag::Int(i)))
+                                    .collect(),
+                            )),
+                        ),
+                    ])),
                 ),
                 (
                     "huge_arrays".into(),
-                    NbtTag::Compound(NbtCompound::from_values(vec![])),
+                    NbtTag::Compound(NbtCompound::from_values(vec![
+                        (
+                            "bytes_10M".into(),
+                            NbtTag::ByteArray((0i32..10_000_000i32).map(|i| i as u8).collect()),
+                        ),
+                        (
+                            "ints_10M".into(),
+                            NbtTag::IntArray((0i32..10_000_000i32).collect()),
+                        ),
+                        (
+                            "longs_10M_b".into(),
+                            NbtTag::LongArray((0i64..10_000_000i64).collect()),
+                        ),
+                    ])),
                 ),
             ]),
         )),

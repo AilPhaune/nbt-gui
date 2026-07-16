@@ -2377,7 +2377,7 @@ impl NbtTabViewer {
                             idx: None,
                             extra: Some(&self.translations.f(
                                 "compound-keys-count",
-                                &HashMap::from([("count".into(), c.iter().count().into())]),
+                                &HashMap::from([("count".into(), (**c).len().into())]),
                             )),
                             icon: &self.icon_compound_nbt,
                             type_hint: &self.translations.c().type_hint_compound,
