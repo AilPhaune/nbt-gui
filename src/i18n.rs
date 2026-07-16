@@ -34,6 +34,13 @@ pub struct CommonTranslationCache {
     pub dialog_error: String,
 
     pub button_delete_text: String,
+    pub button_cut_text: String,
+    pub button_copy_text: String,
+    pub button_paste_text: String,
+    pub button_paste_value_text: String,
+    pub button_paste_key_value_text: String,
+    pub button_paste_above_text: String,
+    pub button_paste_below_text: String,
     pub button_confirm_text: String,
     pub button_create_empty_root: String,
 
@@ -43,6 +50,7 @@ pub struct CommonTranslationCache {
     pub editable_value_empty_text: String,
     pub empty_list_text: String,
     pub compound_simple_value_change_type: String,
+    pub compound_array_change_type: String,
     pub compound_simple_value_try_parse: String,
     pub nbt_list_change_type: String,
     pub nbt_list_try_change_type: String,
@@ -103,8 +111,15 @@ impl CommonTranslationCache {
             dialog_error: loader.t("dialog-error").to_string(),
 
             button_delete_text: loader.t("button-delete-text").to_string(),
+            button_cut_text: loader.t("button-cut-text").to_string(),
+            button_copy_text: loader.t("button-copy-text").to_string(),
+            button_paste_text: loader.t("button-paste-text").to_string(),
+            button_paste_value_text: loader.t("button-paste-value-text").to_string(),
+            button_paste_key_value_text: loader.t("button-paste-key-value-text").to_string(),
+            button_paste_above_text: loader.t("button-paste-above-text").to_string(),
+            button_paste_below_text: loader.t("button-paste-below-text").to_string(),
             button_confirm_text: loader.t("button-confirm-text").to_string(),
-            button_create_empty_root: loader.t("butto-create-empty-root").to_string(),
+            button_create_empty_root: loader.t("button-create-empty-root").to_string(),
 
             root_nbt_empty_text: loader.t("root-nbt-empty-text").to_string(),
             unnamed_root_nbt_text_hint: loader.t("unnamed-root-nbt-text-hint").to_string(),
@@ -114,6 +129,7 @@ impl CommonTranslationCache {
             compound_simple_value_change_type: loader
                 .t("compound-simple-value-change-type")
                 .to_string(),
+            compound_array_change_type: loader.t("compound-array-change-type").to_string(),
             compound_simple_value_try_parse: loader
                 .t("compound-simple-value-try-parse")
                 .to_string(),

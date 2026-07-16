@@ -24,8 +24,8 @@ futures = "0.3.32"
 mca = "2.1.2"
 rayon = "1.12.0"
 rfd = "0.17.2"
+simdnbt = { git = "https://github.com/AilPhaune/simdnbt", rev = "9696e2c10420e47cd00e98bb6a761e3b9240cfe9" }
 # simdnbt = "0.10.0"
-simdnbt = { git = "https://github.com/AilPhaune/simdnbt", branch = "master" }
 unic-langid = "0.9.6"
 anyhow = "1.0.103"
 smallvec = "1.15.2"

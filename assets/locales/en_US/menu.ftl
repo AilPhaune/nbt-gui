@@ -20,6 +20,13 @@ percentage = {$p}%
 dialog-error = Error
 
 button-delete-text = Delete
+button-cut-text = Cut
+button-copy-text = Copy
+button-paste-text = Paste
+button-paste-value-text = Paste value
+button-paste-key-value-text = Paste key and value
+button-paste-above-text = Paste above
+button-paste-below-text = Paste below
 button-confirm-text = Confirm
 button-create-empty-root = Create NBT Root
 
@@ -29,10 +36,11 @@ editable-key-empty-text = Empty key
 editable-value-empty-text = Empty value
 empty-list-text = Empty list
 compound-simple-value-change-type = Change value type to
+compound-array-change-type = Change array type to
 compound-simple-value-try-parse = Try parsing value as
 nbt-list-change-type = Change type to list of
 nbt-list-try-change-type = Try to change type to list of
-dt-conv-warn = Warning: You may lose information by converting to smaller datatypes, or converting to and from floating point numbers or strings.
+dt-conv-warn = Warning: You may lose information by converting to and from smaller datatypes, floating point numbers or strings.
 type-conv-abort-on-fail-text = Abort on conversion fail
 type-conv-default-on-fail-text = Use default value ({$def}) on conversion fail
 button-list-to-compound-conv = Convert to NBT Compound
