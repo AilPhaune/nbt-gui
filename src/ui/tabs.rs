@@ -1780,43 +1780,43 @@ impl NbtTabViewer {
                                     }
                                 }),
                         );
-
-                        continue;
-                    }
-
-                    let (open, m_edit, _) = self.show_entry::<()>(
-                        child_id.clone(),
-                        egui_id,
-                        builder,
-                        EntryContext {
-                            val: None,
-                            key: Some(key.to_str().as_ref()),
-                            idx: None,
-                            extra: Some(&self.translations.f(
-                                "list-element-count",
-                                &HashMap::from([("count".into(), list_len.into())]),
-                            )),
-                            icon: &self.icon_list,
-                            type_hint: nbt_list_type_hint(l, &self.translations),
-                            context_menu: |ui| {
-                                copy_paste_menu!(ui);
-                                ui.separator();
-                                if let Some(n_value) = self
-                                    .show_nbt_list_entry_context_menu_type_conversion(ui, l, true)
-                                {
-                                    update_type = Some(n_value);
-                                }
+                    } else {
+                        let (open, m_edit, _) = self.show_entry::<()>(
+                            child_id.clone(),
+                            egui_id,
+                            builder,
+                            EntryContext {
+                                val: None,
+                                key: Some(key.to_str().as_ref()),
+                                idx: None,
+                                extra: Some(&self.translations.f(
+                                    "list-element-count",
+                                    &HashMap::from([("count".into(), list_len.into())]),
+                                )),
+                                icon: &self.icon_list,
+                                type_hint: nbt_list_type_hint(l, &self.translations),
+                                context_menu: |ui| {
+                                    copy_paste_menu!(ui);
+                                    ui.separator();
+                                    if let Some(n_value) = self
+                                        .show_nbt_list_entry_context_menu_type_conversion(
+                                            ui, l, true,
+                                        )
+                                    {
+                                        update_type = Some(n_value);
+                                    }
+                                },
                             },
-                        },
-                    );
+                        );
 
-                    edit = m_edit.map(|s| (idx, s)).or(edit);
+                        edit = m_edit.map(|s| (idx, s)).or(edit);
 
-                    if open {
-                        self.show_nbt_list(l, child_id.childs(), egui_id, builder);
+                        if open {
+                            self.show_nbt_list(l, child_id.childs(), egui_id, builder);
+                        }
+
+                        builder.close_dir();
                     }
-
-                    builder.close_dir();
                 }
             }
 
