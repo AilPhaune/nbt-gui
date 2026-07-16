@@ -22,6 +22,7 @@ use crate::{
 pub trait NbtValue: Sized + 'static {
     fn nbt_from_str(s: String) -> Option<Self>;
     fn nbt_to_str(&self) -> String;
+    fn nbt_default() -> Self;
 }
 
 impl NbtValue for Mutf8String {
@@ -31,6 +32,10 @@ impl NbtValue for Mutf8String {
 
     fn nbt_to_str(&self) -> String {
         self.to_string()
+    }
+
+    fn nbt_default() -> Self {
+        "".into()
     }
 }
 
@@ -42,10 +47,12 @@ impl NbtValue for () {
     fn nbt_to_str(&self) -> String {
         String::new()
     }
+
+    fn nbt_default() -> Self {}
 }
 
 macro_rules! impl_fromstr2 {
-    ($($t:ty),*) => {
+    ($($t:ty => $def: expr),*) => {
         $(impl NbtValue for $t {
             fn nbt_from_str(s: String) -> Option<Self> {
                 s.parse().ok()
@@ -54,11 +61,127 @@ macro_rules! impl_fromstr2 {
             fn nbt_to_str(&self) -> String {
                 self.to_string()
             }
+
+            fn nbt_default() -> Self {
+                $def
+            }
         })*
     };
 }
 
-impl_fromstr2!(i8, u8, i16, i32, i64, f32, f64, bool);
+impl_fromstr2!(i8 => 0, u8 => 0, i16 => 0, i32 => 0, i64 => 0, f32 => f32::NAN, f64 => f64::NAN);
+
+pub trait From2<T> {
+    fn from2(value: T) -> Self;
+}
+
+macro_rules! impl_from2_for_as {
+    ($($src:ty),* => $($dst:ty),*) => {
+        macro_rules! impl_from2_for_as_once {
+            ($src_: ty) => {
+                $(impl From2<$src_> for $dst {
+                    fn from2(value: $src_) -> Self {
+                        value as $dst
+                    }
+                })*
+            };
+        }
+        $(impl_from2_for_as_once!($src);)*
+    };
+    ($($ty:ty),*) => {
+        impl_from2_for_as!($($ty),* => $($ty),*);
+    }
+}
+
+impl_from2_for_as!(i8, u8, i16, i32, i64, f32, f64);
+
+macro_rules! impl_from2_for_to_string {
+    ($($t:ty),*) => {
+        $(impl From2<$t> for Mutf8String {
+            fn from2(value: $t) -> Self {
+                Mutf8String::from(value.to_string())
+            }
+        })*
+    };
+}
+
+impl_from2_for_to_string!(i8, u8, i16, i32, i64, f32, f64);
+
+macro_rules! impl_from2_for_parse {
+    ($($t:ty),*) => {
+        $(
+            impl From2<&str> for Option<$t> {
+                fn from2(value: &str) -> Self {
+                    value.parse().ok()
+                }
+            }
+
+            impl From2<Mutf8String> for Option<$t> {
+                fn from2(value: Mutf8String) -> Self {
+                    value.to_str().parse().ok()
+                }
+            }
+        )*
+    };
+    (~ $($t:ty),*) => {
+        $(
+            impl From2<&str> for Option<$t> {
+                fn from2(value: &str) -> Self {
+                    Some(value.parse().unwrap_or(<$t>::NAN))
+                }
+            }
+
+            impl From2<Mutf8String> for Option<$t> {
+                fn from2(value: Mutf8String) -> Self {
+                    Some(value.to_str().parse().unwrap_or(<$t>::NAN))
+                }
+            }
+        )*
+    };
+}
+
+impl_from2_for_parse!(i8, u8, i16, i32, i64);
+impl_from2_for_parse!(~ f32, f64);
+
+impl From2<&str> for Option<Mutf8String> {
+    fn from2(value: &str) -> Self {
+        Some(Mutf8String::from(value))
+    }
+}
+
+macro_rules! impl_from2_for_vecs {
+    ($($src:ty),* => $($dst:ty),*) => {
+        macro_rules! impl_from2_for_as_once {
+            ($src_: ty) => {
+                $(impl From2<&[$src_]> for Vec<$dst> {
+                    fn from2(value: &[$src_]) -> Self {
+                        value.iter().map(|b| *b as $dst).collect()
+                    }
+                })*
+            };
+        }
+        $(impl_from2_for_as_once!($src);)*
+    };
+}
+
+impl_from2_for_vecs!(i8, u8, i16, i32, i64, f32, f64 => u8, i32, i64);
+
+impl<Src, Dst> From2<&[Src]> for Vec<Dst>
+where
+    Src: Clone,
+    Option<Dst>: From2<Src>,
+    Dst: NbtValue,
+{
+    fn from2(value: &[Src]) -> Self {
+        value
+            .iter()
+            .map(|e| {
+                <Option<Dst> as From2<Src>>::from2(e.clone())
+                    .unwrap_or_else(<Dst as NbtValue>::nbt_default)
+            })
+            .collect()
+    }
+}
 
 pub trait NbtValueTo<T> {
     fn to(self) -> T;
@@ -260,6 +383,166 @@ macro_rules! conv_warn {
                 .ui(ui);
         });
     };
+}
+
+enum CopyPasteActionArray {
+    Delete(usize),
+    Copy(usize),
+    Cut(usize),
+    ValueInPlace(usize),
+    Insert(usize),
+}
+
+macro_rules! array_element_copy_paste_menu {
+    ($ui: ident, $tab_viewer: ident, $out_copy_paste: ident, $idx: expr) => {{
+        if $ui
+            .button(&*$tab_viewer.translations.c().button_delete_text)
+            .clicked()
+        {
+            $out_copy_paste = Some(CopyPasteActionArray::Delete($idx));
+        }
+
+        if $ui
+            .button(&*$tab_viewer.translations.c().button_cut_text)
+            .clicked()
+        {
+            $out_copy_paste = Some(CopyPasteActionArray::Cut($idx));
+        }
+
+        if $ui
+            .button(&*$tab_viewer.translations.c().button_copy_text)
+            .clicked()
+        {
+            $out_copy_paste = Some(CopyPasteActionArray::Copy($idx));
+        }
+
+        let pasteable = match &$tab_viewer.clipboard {
+            None => false,
+            Some(NbtClipboard::ListEntry(value)) | Some(NbtClipboard::CompoundEntry(_, value)) => {
+                matches!(
+                    value,
+                    NbtTag::Byte(_)
+                        | NbtTag::Short(_)
+                        | NbtTag::Int(_)
+                        | NbtTag::Long(_)
+                        | NbtTag::Float(_)
+                        | NbtTag::Double(_)
+                        | NbtTag::String(_)
+                )
+            }
+        };
+
+        if $ui
+            .add_enabled_ui(pasteable, |ui| {
+                ui.button(&*$tab_viewer.translations.c().button_paste_value_text)
+            })
+            .inner
+            .clicked()
+        {
+            $out_copy_paste = Some(CopyPasteActionArray::ValueInPlace($idx));
+        }
+
+        if $ui
+            .add_enabled_ui(pasteable, |ui| {
+                ui.button(&*$tab_viewer.translations.c().button_paste_above_text)
+            })
+            .inner
+            .clicked()
+        {
+            $out_copy_paste = Some(CopyPasteActionArray::Insert($idx));
+        }
+
+        if $ui
+            .add_enabled_ui(pasteable, |ui| {
+                ui.button(&*$tab_viewer.translations.c().button_paste_below_text)
+            })
+            .inner
+            .clicked()
+        {
+            $out_copy_paste = Some(CopyPasteActionArray::Insert($idx + 1));
+        }
+    }};
+}
+
+macro_rules! array_element_copy_paste_handle_action {
+    ($in_copy_paste: ident, $values: ident, $tab_viewer: ident, $tag_variant: ident) => {{
+        match $in_copy_paste {
+            None => {}
+            Some(CopyPasteActionArray::Delete(idx)) => {
+                if idx < $values.len() {
+                    $values.remove(idx);
+                }
+            }
+            Some(CopyPasteActionArray::Cut(idx)) => {
+                if idx < $values.len() {
+                    $tab_viewer.clipboard = Some(NbtClipboard::ListEntry(NbtTag::$tag_variant(
+                        $values.remove(idx) as _,
+                    )));
+                }
+            }
+            Some(CopyPasteActionArray::Copy(idx)) => {
+                if let Some(value) = $values.get(idx) {
+                    $tab_viewer.clipboard =
+                        Some(NbtClipboard::ListEntry(NbtTag::$tag_variant(*value as _)));
+                }
+            }
+            Some(CopyPasteActionArray::ValueInPlace(idx)) => match &$tab_viewer.clipboard {
+                None => {}
+                Some(NbtClipboard::ListEntry(value))
+                | Some(NbtClipboard::CompoundEntry(_, value)) => {
+                    if let Some(v_ref) = $values.get_mut(idx) {
+                        match value {
+                            NbtTag::Byte(b) => *v_ref = From2::from2(*b),
+                            NbtTag::Short(s) => *v_ref = From2::from2(*s),
+                            NbtTag::Int(i) => *v_ref = From2::from2(*i),
+                            NbtTag::Long(l) => *v_ref = From2::from2(*l),
+                            NbtTag::Float(f) => *v_ref = From2::from2(*f),
+                            NbtTag::Double(d) => *v_ref = From2::from2(*d),
+                            NbtTag::String(s) => {
+                                if let Some(parsed) =
+                                    <Option<_> as From2<_>>::from2(s.to_str().as_ref())
+                                {
+                                    *v_ref = parsed;
+                                }
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+            },
+            Some(CopyPasteActionArray::Insert(idx)) => {
+                macro_rules! ins {
+                    ($v: expr) => {
+                        $values.insert(idx, From2::from2(*$v))
+                    };
+                }
+                match $tab_viewer
+                    .clipboard
+                    .as_ref()
+                    .filter(|_| idx <= $values.len())
+                {
+                    None => {}
+                    Some(NbtClipboard::ListEntry(value))
+                    | Some(NbtClipboard::CompoundEntry(_, value)) => match value {
+                        NbtTag::Byte(b) => ins!(b),
+                        NbtTag::Short(s) => ins!(s),
+                        NbtTag::Int(i) => ins!(i),
+                        NbtTag::Long(l) => ins!(l),
+                        NbtTag::Float(f) => ins!(f),
+                        NbtTag::Double(d) => ins!(d),
+                        NbtTag::String(s) => {
+                            if let Some(parsed) =
+                                <Option<_> as From2<_>>::from2(s.to_str().as_ref())
+                            {
+                                $values.insert(idx, parsed);
+                            }
+                        }
+                        _ => {}
+                    },
+                }
+            }
+        }
+    }};
 }
 
 struct EntryContext<'val, 'key, 'extra, 'icon, 'th, T, ContextMenuFn: FnMut(&mut Ui)> {
@@ -752,8 +1035,60 @@ impl NbtTabViewer {
         egui_id: Id,
         builder: &mut TreeViewBuilder<NbtNodeId>,
     ) -> Option<NbtTag> {
+        macro_rules! copy_paste_menu {
+            ($copy_paste: ident, $translations: expr, $clipboard: expr, $ui: ident, $idx: ident, $pasteable: expr) => {{
+                if $ui.button(&*$translations.c().button_delete_text).clicked() {
+                    $copy_paste = Some(CopyPasteActionArray::Delete($idx));
+                }
+                if $ui.button(&*$translations.c().button_cut_text).clicked() {
+                    $copy_paste = Some(CopyPasteActionArray::Cut($idx));
+                }
+                if $ui.button(&*$translations.c().button_copy_text).clicked() {
+                    $copy_paste = Some(CopyPasteActionArray::Copy($idx));
+                }
+
+                let pasteable = match $clipboard {
+                    Some(NbtClipboard::CompoundEntry(_, value))
+                    | Some(NbtClipboard::ListEntry(value)) => $pasteable(value),
+                    None => false,
+                };
+
+                if $ui
+                    .add_enabled_ui(pasteable, |ui| {
+                        ui.button(&*$translations.c().button_paste_value_text)
+                    })
+                    .inner
+                    .clicked()
+                {
+                    $copy_paste = Some(CopyPasteActionArray::ValueInPlace($idx));
+                }
+
+                if $ui
+                    .add_enabled_ui(pasteable, |ui| {
+                        ui.button(&*$translations.c().button_paste_above_text)
+                    })
+                    .inner
+                    .clicked()
+                {
+                    $copy_paste = Some(CopyPasteActionArray::Insert($idx));
+                }
+
+                if $ui
+                    .add_enabled_ui(pasteable, |ui| {
+                        ui.button(&*$translations.c().button_paste_below_text)
+                    })
+                    .inner
+                    .clicked()
+                {
+                    $copy_paste = Some(CopyPasteActionArray::Insert($idx + 1));
+                }
+            }};
+        }
+
         macro_rules! simple_view_list {
-            ($values: ident, $icon: ident, $th: ident) => {
+            ($values: ident, $icon: ident, $th: ident, $tag_variant: ident) => {{
+                let mut copy_paste = None;
+
                 self.show_list(
                     child_ids,
                     egui_id,
@@ -772,8 +1107,25 @@ impl NbtTabViewer {
                                 icon: &tab_viewer.$icon,
                                 type_hint: &*tab_viewer.translations.c().$th,
                                 context_menu: |ui| {
-                                    // TODO: List element context menu
-                                    ui.label("TODO: List element context menu");
+                                    copy_paste_menu!(
+                                        copy_paste,
+                                        tab_viewer.translations,
+                                        &tab_viewer.clipboard,
+                                        ui,
+                                        idx,
+                                        |value: &NbtTag| {
+                                            matches!(
+                                                value,
+                                                NbtTag::Byte(_)
+                                                    | NbtTag::Short(_)
+                                                    | NbtTag::Int(_)
+                                                    | NbtTag::Long(_)
+                                                    | NbtTag::Float(_)
+                                                    | NbtTag::Double(_)
+                                                    | NbtTag::String(_)
+                                            )
+                                        }
+                                    );
                                 },
                             },
                         );
@@ -782,12 +1134,84 @@ impl NbtTabViewer {
                             *value = new_value;
                         }
                     },
-                )
-            };
+                );
+
+                match copy_paste {
+                    None => {}
+                    Some(CopyPasteActionArray::Delete(idx)) => {
+                        $values.remove(idx);
+                    }
+                    Some(CopyPasteActionArray::Cut(idx)) => {
+                        if idx < $values.len() {
+                            self.clipboard = Some(NbtClipboard::ListEntry(NbtTag::$tag_variant(
+                                $values.remove(idx),
+                            )));
+                        }
+                    }
+                    Some(CopyPasteActionArray::Copy(idx)) => {
+                        if let Some(value) = $values.get(idx) {
+                            self.clipboard =
+                                Some(NbtClipboard::ListEntry(NbtTag::$tag_variant(value.clone())));
+                        }
+                    }
+                    Some(CopyPasteActionArray::ValueInPlace(idx)) => match &self.clipboard {
+                        None => {}
+                        Some(NbtClipboard::CompoundEntry(_, value))
+                        | Some(NbtClipboard::ListEntry(value)) => {
+                            if let Some(v_ref) = $values.get_mut(idx) {
+                                match value {
+                                    NbtTag::Byte(b) => *v_ref = From2::from2(*b),
+                                    NbtTag::Short(s) => *v_ref = From2::from2(*s),
+                                    NbtTag::Int(i) => *v_ref = From2::from2(*i),
+                                    NbtTag::Long(l) => *v_ref = From2::from2(*l),
+                                    NbtTag::Float(f) => *v_ref = From2::from2(*f),
+                                    NbtTag::Double(d) => *v_ref = From2::from2(*d),
+                                    NbtTag::String(s) => {
+                                        if let Some(parsed) =
+                                            <Option<_> as From2<&str>>::from2(s.to_str().as_ref())
+                                        {
+                                            *v_ref = parsed;
+                                        }
+                                    }
+                                    _ => {}
+                                }
+                            }
+                        }
+                    },
+                    Some(CopyPasteActionArray::Insert(idx)) => match &self.clipboard {
+                        None => {}
+                        Some(NbtClipboard::CompoundEntry(_, value))
+                        | Some(NbtClipboard::ListEntry(value))
+                            if idx <= $values.len() =>
+                        {
+                            match value {
+                                NbtTag::Byte(b) => $values.insert(idx, From2::from2(*b)),
+                                NbtTag::Short(s) => $values.insert(idx, From2::from2(*s)),
+                                NbtTag::Int(i) => $values.insert(idx, From2::from2(*i)),
+                                NbtTag::Long(l) => $values.insert(idx, From2::from2(*l)),
+                                NbtTag::Float(f) => $values.insert(idx, From2::from2(*f)),
+                                NbtTag::Double(d) => $values.insert(idx, From2::from2(*d)),
+                                NbtTag::String(s) => {
+                                    if let Some(parsed) =
+                                        <Option<_> as From2<&str>>::from2(s.to_str().as_ref())
+                                    {
+                                        $values.insert(idx, parsed);
+                                    }
+                                }
+                                _ => {}
+                            }
+                        }
+                        Some(NbtClipboard::CompoundEntry(_, _))
+                        | Some(NbtClipboard::ListEntry(_)) => {}
+                    },
+                }
+            }};
         }
 
         macro_rules! simple_view_list_list {
-            ($values: ident, $th: ident, $th_elem: ident) => {{
+            ($values: ident, $th: ident, $th_elem: ident, $tag_variant: ident, $sub_tag_variant: ident) => {{
+                let mut copy_paste = None;
+
                 self.show_list(
                     child_ids,
                     egui_id,
@@ -809,13 +1233,38 @@ impl NbtTabViewer {
                                 icon: &tab_viewer.icon_array,
                                 type_hint: &*tab_viewer.translations.c().$th,
                                 context_menu: |ui| {
-                                    // TODO: List of arrays subarray context menu
-                                    ui.label("TODO: List of arrays subarray context menu");
+                                    copy_paste_menu!(
+                                        copy_paste,
+                                        tab_viewer.translations,
+                                        &tab_viewer.clipboard,
+                                        ui,
+                                        idx,
+                                        |value: &NbtTag| {
+                                            matches!(
+                                                value,
+                                                NbtTag::ByteArray(_)
+                                                    | NbtTag::IntArray(_)
+                                                    | NbtTag::LongArray(_)
+                                                    | NbtTag::List(
+                                                        NbtList::Byte(_)
+                                                            | NbtList::Short(_)
+                                                            | NbtList::Int(_)
+                                                            | NbtList::Long(_)
+                                                            | NbtList::Float(_)
+                                                            | NbtList::Double(_)
+                                                            | NbtList::String(_)
+                                                            | NbtList::Empty
+                                                    )
+                                            )
+                                        }
+                                    );
                                 },
                             },
                         );
 
                         if open {
+                            let mut copy_paste = None;
+
                             tab_viewer.show_list(
                                 id.childs(),
                                 egui_id,
@@ -834,9 +1283,8 @@ impl NbtTabViewer {
                                             icon: &tab_viewer.icon_numeric,
                                             type_hint: &*tab_viewer.translations.c().$th_elem,
                                             context_menu: |ui| {
-                                                // TODO: List of arrays subelement context menu
-                                                ui.label(
-                                                    "TODO: List of arrays subelement context menu",
+                                                array_element_copy_paste_menu!(
+                                                    ui, tab_viewer, copy_paste, idx
                                                 );
                                             },
                                         },
@@ -846,147 +1294,326 @@ impl NbtTabViewer {
                                         *value = new_value;
                                     }
                                 },
-                            )
+                            );
+
+                            array_element_copy_paste_handle_action!(
+                                copy_paste,
+                                value,
+                                tab_viewer,
+                                $sub_tag_variant
+                            );
                         }
 
                         builder.close_dir();
                     },
                 );
+
+                match copy_paste {
+                    None => {}
+                    Some(CopyPasteActionArray::Delete(idx)) => {
+                        $values.remove(idx);
+                    }
+                    Some(CopyPasteActionArray::Cut(idx)) => {
+                        if idx < $values.len() {
+                            self.clipboard = Some(NbtClipboard::ListEntry(NbtTag::$tag_variant(
+                                $values.remove(idx),
+                            )));
+                        }
+                    }
+                    Some(CopyPasteActionArray::Copy(idx)) => {
+                        if let Some(value) = $values.get(idx) {
+                            self.clipboard =
+                                Some(NbtClipboard::ListEntry(NbtTag::$tag_variant(value.clone())));
+                        }
+                    }
+                    Some(CopyPasteActionArray::ValueInPlace(idx)) => match &self.clipboard {
+                        None => {}
+                        Some(NbtClipboard::CompoundEntry(_, value))
+                        | Some(NbtClipboard::ListEntry(value)) => {
+                            if let Some(v_ref) = $values.get_mut(idx) {
+                                match value {
+                                    NbtTag::ByteArray(ba) => *v_ref = From2::from2(ba.as_slice()),
+                                    NbtTag::IntArray(ia) => *v_ref = From2::from2(ia.as_slice()),
+                                    NbtTag::LongArray(la) => *v_ref = From2::from2(la.as_slice()),
+                                    NbtTag::List(l) => match l {
+                                        NbtList::Byte(b) => *v_ref = From2::from2(b.as_slice()),
+                                        NbtList::Short(s) => *v_ref = From2::from2(s.as_slice()),
+                                        NbtList::Int(i) => *v_ref = From2::from2(i.as_slice()),
+                                        NbtList::Long(l) => *v_ref = From2::from2(l.as_slice()),
+                                        NbtList::Float(f) => *v_ref = From2::from2(f.as_slice()),
+                                        NbtList::Double(d) => *v_ref = From2::from2(d.as_slice()),
+                                        NbtList::String(s) => *v_ref = From2::from2(s.as_slice()),
+                                        NbtList::Empty => *v_ref = vec![],
+                                        _ => {}
+                                    },
+                                    _ => {}
+                                }
+                            }
+                        }
+                    },
+                    Some(CopyPasteActionArray::Insert(idx)) => match &self.clipboard {
+                        None => {}
+                        Some(NbtClipboard::CompoundEntry(_, value))
+                        | Some(NbtClipboard::ListEntry(value))
+                            if idx <= $values.len() =>
+                        {
+                            macro_rules! ins {
+                                ($v: expr) => {
+                                    $values.insert(idx, From2::from2($v.as_slice()))
+                                };
+                            }
+                            match value {
+                                NbtTag::ByteArray(ba) => ins!(ba),
+                                NbtTag::IntArray(ia) => ins!(ia),
+                                NbtTag::LongArray(la) => ins!(la),
+                                NbtTag::List(l) => match l {
+                                    NbtList::Byte(b) => ins!(b),
+                                    NbtList::Short(s) => ins!(s),
+                                    NbtList::Int(i) => ins!(i),
+                                    NbtList::Long(l) => ins!(l),
+                                    NbtList::Float(f) => ins!(f),
+                                    NbtList::Double(d) => ins!(d),
+                                    NbtList::String(s) => ins!(s),
+                                    NbtList::Empty => $values.insert(idx, vec![]),
+                                    _ => {}
+                                },
+                                _ => {}
+                            }
+                        }
+                        Some(NbtClipboard::CompoundEntry(_, _))
+                        | Some(NbtClipboard::ListEntry(_)) => {}
+                    },
+                }
             }};
         }
 
         let mut edit_value = None;
 
         match nbt {
-            NbtList::Empty => unreachable!("This is a bug!"),
-            NbtList::Byte(bs) => simple_view_list!(bs, icon_numeric, type_hint_i8),
-            NbtList::Short(shs) => simple_view_list!(shs, icon_numeric, type_hint_i16),
-            NbtList::Int(is) => simple_view_list!(is, icon_numeric, type_hint_i32),
-            NbtList::Long(ls) => simple_view_list!(ls, icon_numeric, type_hint_i64),
-            NbtList::Float(fs) => simple_view_list!(fs, icon_numeric, type_hint_f32),
-            NbtList::Double(ds) => simple_view_list!(ds, icon_numeric, type_hint_f64),
-            NbtList::String(strs) => simple_view_list!(strs, icon_string, type_hint_str),
+            NbtList::Empty => {}
+            NbtList::Byte(bs) => simple_view_list!(bs, icon_numeric, type_hint_i8, Byte),
+            NbtList::Short(shs) => simple_view_list!(shs, icon_numeric, type_hint_i16, Short),
+            NbtList::Int(is) => simple_view_list!(is, icon_numeric, type_hint_i32, Int),
+            NbtList::Long(ls) => simple_view_list!(ls, icon_numeric, type_hint_i64, Long),
+            NbtList::Float(fs) => simple_view_list!(fs, icon_numeric, type_hint_f32, Float),
+            NbtList::Double(ds) => simple_view_list!(ds, icon_numeric, type_hint_f64, Double),
+            NbtList::String(strs) => simple_view_list!(strs, icon_string, type_hint_str, String),
+
             NbtList::ByteArray(bas) => {
-                simple_view_list_list!(bas, type_hint_byte_array, type_hint_u8)
+                simple_view_list_list!(bas, type_hint_byte_array, type_hint_u8, ByteArray, Byte)
             }
             NbtList::IntArray(ias) => {
-                simple_view_list_list!(ias, type_hint_int_array, type_hint_i32)
+                simple_view_list_list!(ias, type_hint_int_array, type_hint_i32, IntArray, Int)
             }
             NbtList::LongArray(las) => {
-                simple_view_list_list!(las, type_hint_long_array, type_hint_i64)
+                simple_view_list_list!(las, type_hint_long_array, type_hint_i64, LongArray, Long)
             }
-            NbtList::List(ls) => self.show_list(
-                child_ids,
-                egui_id,
-                builder,
-                ls,
-                |tab_viewer, id, egui_id, builder, idx, value| {
-                    let list_len = nbt_list_len(value);
 
-                    if matches!(value, NbtList::Empty) {
-                        builder.node(NodeBuilder::leaf(id.clone()).label_ui(|ui| {
-                            ui.horizontal(|ui| {
-                                Label::new(
-                                    RichText::new(tab_viewer.icon_list.0)
-                                        .family(tab_viewer.icon_list.1.clone())
-                                        .color(ui.visuals().text_color()),
-                                )
-                                .sense(Sense::empty())
-                                .selectable(false)
-                                .show_tooltip_when_elided(false)
-                                .ui(ui);
+            NbtList::List(ls) => {
+                let mut copy_paste = None;
+                self.show_list(
+                    child_ids,
+                    egui_id,
+                    builder,
+                    ls,
+                    |tab_viewer, id, egui_id, builder, idx, value| {
+                        let list_len = nbt_list_len(value);
 
-                                ui.label(
-                                    RichText::new(idx.to_string()).color(ui.visuals().text_color()),
-                                );
+                        let (open, _, _) = tab_viewer.show_entry::<()>(
+                            id.clone(),
+                            egui_id,
+                            builder,
+                            EntryContext {
+                                val: None,
+                                key: None,
+                                idx: Some(idx),
+                                extra: Some(&tab_viewer.translations.f(
+                                    "list-element-count",
+                                    &HashMap::from([("count".into(), list_len.into())]),
+                                )),
+                                icon: &tab_viewer.icon_list,
+                                type_hint: nbt_list_type_hint(value, &tab_viewer.translations),
+                                context_menu: |ui| {
+                                    copy_paste_menu!(
+                                        copy_paste,
+                                        tab_viewer.translations,
+                                        &tab_viewer.clipboard,
+                                        ui,
+                                        idx,
+                                        |value: &NbtTag| {
+                                            matches!(
+                                                value,
+                                                NbtTag::ByteArray(_)
+                                                    | NbtTag::IntArray(_)
+                                                    | NbtTag::LongArray(_)
+                                                    | NbtTag::List(_)
+                                            )
+                                        }
+                                    );
+                                    ui.separator();
 
-                                Label::new(":")
-                                    .sense(Sense::empty())
-                                    .selectable(false)
-                                    .show_tooltip_when_elided(false)
-                                    .ui(ui);
+                                    if let Some(to_tag) = tab_viewer
+                                        .show_nbt_list_entry_context_menu_type_conversion(
+                                            ui, value, false,
+                                        )
+                                    {
+                                        edit_value = Some(to_tag);
+                                    }
+                                },
+                            },
+                        );
 
-                                Label::new(
-                                    RichText::new(&*tab_viewer.translations.c().empty_list_text)
-                                        .color(ui.visuals().text_color()),
-                                )
-                                .ui(ui);
-                            })
-                            .response
-                            .interact(Sense::hover())
-                            .on_hover_text(nbt_list_type_hint(value, &tab_viewer.translations));
-                        }));
+                        if open {
+                            let _ = tab_viewer.show_nbt_list(value, id.childs(), egui_id, builder);
+                        }
 
-                        return;
+                        builder.close_dir();
+                    },
+                );
+
+                match copy_paste {
+                    None => {}
+                    Some(CopyPasteActionArray::Delete(idx)) => {
+                        ls.remove(idx);
                     }
-
-                    let (open, _, _) = tab_viewer.show_entry::<()>(
-                        id.clone(),
-                        egui_id,
-                        builder,
-                        EntryContext {
-                            val: None,
-                            key: None,
-                            idx: Some(idx),
-                            extra: Some(&tab_viewer.translations.f(
-                                "list-element-count",
-                                &HashMap::from([("count".into(), list_len.into())]),
-                            )),
-                            icon: &tab_viewer.icon_list,
-                            type_hint: nbt_list_type_hint(value, &tab_viewer.translations),
-                            context_menu: |ui| {
-                                if let Some(to_tag) = tab_viewer
-                                    .show_nbt_list_entry_context_menu_type_conversion(
-                                        ui, value, false,
-                                    )
-                                {
-                                    edit_value = Some(to_tag);
+                    Some(CopyPasteActionArray::Cut(idx)) => {
+                        if idx < ls.len() {
+                            self.clipboard =
+                                Some(NbtClipboard::ListEntry(NbtTag::List(ls.remove(idx))));
+                        }
+                    }
+                    Some(CopyPasteActionArray::Copy(idx)) => {
+                        if let Some(value) = ls.get(idx) {
+                            self.clipboard =
+                                Some(NbtClipboard::ListEntry(NbtTag::List(value.clone())));
+                        }
+                    }
+                    Some(CopyPasteActionArray::ValueInPlace(idx)) => match &self.clipboard {
+                        None => {}
+                        Some(NbtClipboard::CompoundEntry(_, value))
+                        | Some(NbtClipboard::ListEntry(value)) => {
+                            if let Some(v_ref) = ls.get_mut(idx) {
+                                match value {
+                                    NbtTag::ByteArray(ba) => {
+                                        *v_ref =
+                                            NbtList::Byte(ba.iter().map(|b| *b as i8).collect())
+                                    }
+                                    NbtTag::IntArray(ia) => *v_ref = NbtList::Int(ia.to_vec()),
+                                    NbtTag::LongArray(la) => *v_ref = NbtList::Long(la.to_vec()),
+                                    NbtTag::List(l) => *v_ref = l.clone(),
+                                    _ => {}
                                 }
+                            }
+                        }
+                    },
+                    Some(CopyPasteActionArray::Insert(idx)) => match &self.clipboard {
+                        None => {}
+                        Some(NbtClipboard::CompoundEntry(_, value))
+                        | Some(NbtClipboard::ListEntry(value))
+                            if idx <= ls.len() =>
+                        {
+                            match value {
+                                NbtTag::ByteArray(ba) => ls.insert(
+                                    idx,
+                                    NbtList::Byte(ba.iter().map(|b| *b as i8).collect()),
+                                ),
+                                NbtTag::IntArray(ia) => ls.insert(idx, NbtList::Int(ia.to_vec())),
+                                NbtTag::LongArray(la) => ls.insert(idx, NbtList::Long(la.to_vec())),
+                                NbtTag::List(l) => ls.insert(idx, l.clone()),
+                                _ => {}
+                            }
+                        }
+                        Some(NbtClipboard::CompoundEntry(_, _))
+                        | Some(NbtClipboard::ListEntry(_)) => {}
+                    },
+                }
+            }
+
+            NbtList::Compound(cs) => {
+                let mut copy_paste = None;
+
+                self.show_list(
+                    child_ids,
+                    egui_id,
+                    builder,
+                    cs,
+                    |tab_viewer, id, egui_id, builder, idx, value| {
+                        let (open, _, _) = tab_viewer.show_entry::<()>(
+                            id.clone(),
+                            egui_id,
+                            builder,
+                            EntryContext {
+                                val: None,
+                                key: None,
+                                idx: Some(idx),
+                                extra: Some(&tab_viewer.translations.f(
+                                    "compound-keys-count",
+                                    &HashMap::from([("count".into(), value.iter().count().into())]),
+                                )),
+                                icon: &tab_viewer.icon_compound_nbt,
+                                type_hint: &tab_viewer.translations.c().type_hint_compound,
+                                context_menu: |ui| {
+                                    copy_paste_menu!(
+                                        copy_paste,
+                                        tab_viewer.translations,
+                                        &tab_viewer.clipboard,
+                                        ui,
+                                        idx,
+                                        |value: &NbtTag| { matches!(value, NbtTag::Compound(_)) }
+                                    );
+                                },
                             },
-                        },
-                    );
+                        );
 
-                    if open {
-                        let _ = tab_viewer.show_nbt_list(value, id.childs(), egui_id, builder);
+                        if open {
+                            tab_viewer.show_compound_tree(value, id.childs(), egui_id, builder);
+                        }
+
+                        builder.close_dir();
+                    },
+                );
+
+                match copy_paste {
+                    None => {}
+                    Some(CopyPasteActionArray::Delete(idx)) => {
+                        cs.remove(idx);
                     }
-
-                    builder.close_dir();
-                },
-            ),
-            NbtList::Compound(cs) => self.show_list(
-                child_ids,
-                egui_id,
-                builder,
-                cs,
-                |tab_viewer, id, egui_id, builder, idx, value| {
-                    let (open, _, _) = tab_viewer.show_entry::<()>(
-                        id.clone(),
-                        egui_id,
-                        builder,
-                        EntryContext {
-                            val: None,
-                            key: None,
-                            idx: Some(idx),
-                            extra: Some(&tab_viewer.translations.f(
-                                "compound-keys-count",
-                                &HashMap::from([("count".into(), value.iter().count().into())]),
-                            )),
-                            icon: &tab_viewer.icon_compound_nbt,
-                            type_hint: &tab_viewer.translations.c().type_hint_compound,
-                            context_menu: |ui| {
-                                // TODO: Compound in list context menu
-                                ui.label("TODDO: Compound in list context menu");
-                            },
-                        },
-                    );
-
-                    if open {
-                        tab_viewer.show_compound_tree(value, id.childs(), egui_id, builder);
+                    Some(CopyPasteActionArray::Cut(idx)) => {
+                        if idx < cs.len() {
+                            self.clipboard =
+                                Some(NbtClipboard::ListEntry(NbtTag::Compound(cs.remove(idx))));
+                        }
                     }
-
-                    builder.close_dir();
-                },
-            ),
+                    Some(CopyPasteActionArray::Copy(idx)) => {
+                        if let Some(value) = cs.get(idx) {
+                            self.clipboard =
+                                Some(NbtClipboard::ListEntry(NbtTag::Compound(value.clone())));
+                        }
+                    }
+                    Some(CopyPasteActionArray::ValueInPlace(idx)) => match &self.clipboard {
+                        None => {}
+                        Some(NbtClipboard::CompoundEntry(_, value))
+                        | Some(NbtClipboard::ListEntry(value)) => {
+                            if let Some(v_ref) = cs.get_mut(idx)
+                                && let NbtTag::Compound(c) = value
+                            {
+                                *v_ref = c.clone();
+                            }
+                        }
+                    },
+                    Some(CopyPasteActionArray::Insert(idx)) => match &self.clipboard {
+                        None => {}
+                        Some(NbtClipboard::CompoundEntry(_, value))
+                        | Some(NbtClipboard::ListEntry(value)) => {
+                            if idx <= cs.len()
+                                && let NbtTag::Compound(c) = value
+                            {
+                                cs.insert(idx, c.clone());
+                            }
+                        }
+                    },
+                }
+            }
         }
 
         edit_value
@@ -1142,7 +1769,7 @@ impl NbtTabViewer {
         }
 
         match nbt {
-            NbtList::Empty => {
+            _ if nbt_list_len(nbt) == 0 => {
                 convs!(nbt_list_change_type, |ui| {
                     simple_empty_conv_to!(ui, type_hint_i8, Byte);
                     simple_empty_conv_to!(ui, type_hint_i16, Short);
@@ -1157,8 +1784,19 @@ impl NbtTabViewer {
                     simple_empty_conv_to!(ui, type_hint_list, List);
                     simple_empty_conv_to!(ui, type_hint_compound, Compound);
                 });
+                if ui
+                    .button(&*self.translations.c().button_empty_list_to_generic)
+                    .clicked()
+                {
+                    new_value = Some(NbtList::Empty);
+                }
                 let mut empty: [i8; 0] = [];
                 conv_to_tag!(ui, &mut empty, Byte);
+            }
+
+            NbtList::Empty => {
+                // Matched by the previous match arm
+                unreachable!();
             }
 
             NbtList::Byte(bs) => {
@@ -1416,7 +2054,7 @@ impl NbtTabViewer {
             }
 
             macro_rules! simple_view_list {
-                ($values: ident, $icon: ident, $th: ident, $th_elem: ident, $context_menu: expr) => {{
+                ($values: ident, $icon: ident, $th: ident, $th_elem: ident, $tag_variant: ident, $context_menu: expr) => {{
                     let (open, m_edit, _) = self.show_entry::<()>(
                         child_id.clone(),
                         egui_id,
@@ -1438,6 +2076,8 @@ impl NbtTabViewer {
                     edit = m_edit.map(|s| (idx, s)).or(edit);
 
                     if open {
+                        let mut copy_paste = None;
+
                         self.show_list(
                             child_id.childs(),
                             egui_id,
@@ -1456,8 +2096,9 @@ impl NbtTabViewer {
                                         icon: &tab_viewer.$icon,
                                         type_hint: &*tab_viewer.translations.c().$th_elem,
                                         context_menu: |ui| {
-                                            // TODO: Array element context menu
-                                            ui.label("TODO: Array element context menu");
+                                            array_element_copy_paste_menu!(
+                                                ui, tab_viewer, copy_paste, idx
+                                            );
                                         },
                                     },
                                 );
@@ -1466,6 +2107,13 @@ impl NbtTabViewer {
                                     *value = new_value;
                                 }
                             },
+                        );
+
+                        array_element_copy_paste_handle_action!(
+                            copy_paste,
+                            $values,
+                            self,
+                            $tag_variant
                         );
                     }
 
@@ -1652,28 +2300,48 @@ impl NbtTabViewer {
                 }
 
                 NbtTag::ByteArray(ba) => {
-                    simple_view_list!(ba, icon_numeric, type_hint_byte_array, type_hint_u8, |ui| {
-                        copy_paste_menu!(ui);
-                        ui.separator();
-                        ui.menu_button(&*self.translations.c().compound_array_change_type, |ui| {
-                            conv_warn!(self.translations, ui);
-                            convert_to_array!(ui, ba, type_hint_int_array, IntArray, i32);
-                            convert_to_array!(ui, ba, type_hint_long_array, LongArray, i64);
-                            convert_array_to_list!(ui, ba, type_hint_list, Byte, i8);
-                        });
-                    });
+                    simple_view_list!(
+                        ba,
+                        icon_numeric,
+                        type_hint_byte_array,
+                        type_hint_u8,
+                        Byte,
+                        |ui| {
+                            copy_paste_menu!(ui);
+                            ui.separator();
+                            ui.menu_button(
+                                &*self.translations.c().compound_array_change_type,
+                                |ui| {
+                                    conv_warn!(self.translations, ui);
+                                    convert_to_array!(ui, ba, type_hint_int_array, IntArray, i32);
+                                    convert_to_array!(ui, ba, type_hint_long_array, LongArray, i64);
+                                    convert_array_to_list!(ui, ba, type_hint_list, Byte, i8);
+                                },
+                            );
+                        }
+                    );
                 }
                 NbtTag::IntArray(ia) => {
-                    simple_view_list!(ia, icon_numeric, type_hint_int_array, type_hint_i32, |ui| {
-                        copy_paste_menu!(ui);
-                        ui.separator();
-                        ui.menu_button(&*self.translations.c().compound_array_change_type, |ui| {
-                            conv_warn!(self.translations, ui);
-                            convert_to_array!(ui, ia, type_hint_byte_array, ByteArray, u8);
-                            convert_to_array!(ui, ia, type_hint_long_array, LongArray, i64);
-                            convert_array_to_list!(ui, ia, type_hint_list, Int, i32);
-                        });
-                    });
+                    simple_view_list!(
+                        ia,
+                        icon_numeric,
+                        type_hint_int_array,
+                        type_hint_i32,
+                        Int,
+                        |ui| {
+                            copy_paste_menu!(ui);
+                            ui.separator();
+                            ui.menu_button(
+                                &*self.translations.c().compound_array_change_type,
+                                |ui| {
+                                    conv_warn!(self.translations, ui);
+                                    convert_to_array!(ui, ia, type_hint_byte_array, ByteArray, u8);
+                                    convert_to_array!(ui, ia, type_hint_long_array, LongArray, i64);
+                                    convert_array_to_list!(ui, ia, type_hint_list, Int, i32);
+                                },
+                            );
+                        }
+                    );
                 }
                 NbtTag::LongArray(la) => {
                     simple_view_list!(
@@ -1681,6 +2349,7 @@ impl NbtTabViewer {
                         icon_numeric,
                         type_hint_long_array,
                         type_hint_i64,
+                        Long,
                         |ui| {
                             copy_paste_menu!(ui);
                             ui.separator();
@@ -1729,101 +2398,40 @@ impl NbtTabViewer {
 
                 NbtTag::List(l) => {
                     let list_len = nbt_list_len(l);
-                    if matches!(l, NbtList::Empty) {
-                        builder.node(
-                            NodeBuilder::leaf(child_id)
-                                .label_ui(|ui| {
-                                    ui.horizontal(|ui| {
-                                        Label::new(
-                                            RichText::new(self.icon_list.0)
-                                                .family(self.icon_list.1.clone())
-                                                .color(ui.visuals().text_color()),
-                                        )
-                                        .sense(Sense::empty())
-                                        .selectable(false)
-                                        .show_tooltip_when_elided(false)
-                                        .ui(ui);
 
-                                        edit = Self::editable_str_label(
-                                            ui,
-                                            egui_id.with("editable-key"),
-                                            key.to_str().as_ref(),
-                                            &self.translations.c().editable_key_empty_text,
-                                        )
-                                        .and_then(|s| {
-                                            if s.trim().is_empty() {
-                                                None
-                                            } else {
-                                                Some((idx, s))
-                                            }
-                                        })
-                                        .or(edit.take());
-
-                                        Label::new(":")
-                                            .sense(Sense::empty())
-                                            .selectable(false)
-                                            .show_tooltip_when_elided(false)
-                                            .ui(ui);
-
-                                        Label::new(
-                                            RichText::new(&*self.translations.c().empty_list_text)
-                                                .color(ui.visuals().text_color()),
-                                        )
-                                        .ui(ui);
-                                    })
-                                    .response
-                                    .interact(Sense::hover())
-                                    .on_hover_text(&*self.translations.c().type_hint_list_lists);
-                                })
-                                .context_menu(|ui| {
-                                    copy_paste_menu!(ui);
-                                    ui.separator();
-                                    if let Some(n_value) = self
-                                        .show_nbt_list_entry_context_menu_type_conversion(
-                                            ui, l, true,
-                                        )
-                                    {
-                                        update_type = Some(n_value);
-                                    }
-                                }),
-                        );
-                    } else {
-                        let (open, m_edit, _) = self.show_entry::<()>(
-                            child_id.clone(),
-                            egui_id,
-                            builder,
-                            EntryContext {
-                                val: None,
-                                key: Some(key.to_str().as_ref()),
-                                idx: None,
-                                extra: Some(&self.translations.f(
-                                    "list-element-count",
-                                    &HashMap::from([("count".into(), list_len.into())]),
-                                )),
-                                icon: &self.icon_list,
-                                type_hint: nbt_list_type_hint(l, &self.translations),
-                                context_menu: |ui| {
-                                    copy_paste_menu!(ui);
-                                    ui.separator();
-                                    if let Some(n_value) = self
-                                        .show_nbt_list_entry_context_menu_type_conversion(
-                                            ui, l, true,
-                                        )
-                                    {
-                                        update_type = Some(n_value);
-                                    }
-                                },
+                    let (open, m_edit, _) = self.show_entry::<()>(
+                        child_id.clone(),
+                        egui_id,
+                        builder,
+                        EntryContext {
+                            val: None,
+                            key: Some(key.to_str().as_ref()),
+                            idx: None,
+                            extra: Some(&self.translations.f(
+                                "list-element-count",
+                                &HashMap::from([("count".into(), list_len.into())]),
+                            )),
+                            icon: &self.icon_list,
+                            type_hint: nbt_list_type_hint(l, &self.translations),
+                            context_menu: |ui| {
+                                copy_paste_menu!(ui);
+                                ui.separator();
+                                if let Some(n_value) = self
+                                    .show_nbt_list_entry_context_menu_type_conversion(ui, l, true)
+                                {
+                                    update_type = Some(n_value);
+                                }
                             },
-                        );
+                        },
+                    );
 
-                        edit = m_edit.map(|s| (idx, s)).or(edit);
+                    edit = m_edit.map(|s| (idx, s)).or(edit);
 
-                        if open {
-                            self.show_nbt_list(l, child_id.childs(), egui_id, builder);
-                        }
-
-                        builder.close_dir();
+                    if open {
+                        self.show_nbt_list(l, child_id.childs(), egui_id, builder);
                     }
+
+                    builder.close_dir();
                 }
             }
 

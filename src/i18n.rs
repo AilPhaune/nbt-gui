@@ -43,6 +43,8 @@ pub struct CommonTranslationCache {
     pub button_paste_below_text: String,
     pub button_confirm_text: String,
     pub button_create_empty_root: String,
+    pub button_list_to_compound_conv: String,
+    pub button_empty_list_to_generic: String,
 
     pub root_nbt_empty_text: String,
     pub unnamed_root_nbt_text_hint: String,
@@ -57,7 +59,6 @@ pub struct CommonTranslationCache {
     pub dt_conv_warn: String,
     pub type_conv_abort_on_fail_text: String,
     pub type_conv_default_on_fail_text: String,
-    pub button_list_to_compound_conv: String,
 
     pub type_hint_empty_list: String,
     pub type_hint_i8: String,
@@ -120,6 +121,8 @@ impl CommonTranslationCache {
             button_paste_below_text: loader.t("button-paste-below-text").to_string(),
             button_confirm_text: loader.t("button-confirm-text").to_string(),
             button_create_empty_root: loader.t("button-create-empty-root").to_string(),
+            button_list_to_compound_conv: loader.t("button-list-to-compound-conv").to_string(),
+            button_empty_list_to_generic: loader.t("button-empty-list-to-generic").to_string(),
 
             root_nbt_empty_text: loader.t("root-nbt-empty-text").to_string(),
             unnamed_root_nbt_text_hint: loader.t("unnamed-root-nbt-text-hint").to_string(),
@@ -138,7 +141,6 @@ impl CommonTranslationCache {
             dt_conv_warn: loader.t("dt-conv-warn").to_string(),
             type_conv_abort_on_fail_text: loader.t("type-conv-abort-on-fail-text").to_string(),
             type_conv_default_on_fail_text: loader.t("type-conv-default-on-fail-text").to_string(),
-            button_list_to_compound_conv: loader.t("button-list-to-compound-conv").to_string(),
 
             type_hint_empty_list: loader.t("type-hint_empty-list").to_string(),
             type_hint_i8: loader.t("type-hint-i8").to_string(),

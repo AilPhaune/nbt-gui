@@ -29,6 +29,8 @@ button-paste-above-text = Paste above
 button-paste-below-text = Paste below
 button-confirm-text = Confirm
 button-create-empty-root = Create NBT Root
+button-list-to-compound-conv = Convert to NBT Compound
+button-empty-list-to-generic = Convert to generic empty list
 
 root-nbt-empty-text = No NBT root
 unnamed-root-nbt-text-hint = Unnamed NBT root
@@ -43,7 +45,6 @@ nbt-list-try-change-type = Try to change type to list of
 dt-conv-warn = Warning: You may lose information by converting to and from smaller datatypes, floating point numbers or strings.
 type-conv-abort-on-fail-text = Abort on conversion fail
 type-conv-default-on-fail-text = Use default value ({$def}) on conversion fail
-button-list-to-compound-conv = Convert to NBT Compound
 
 list-element-count = [{$count} {$count ->
     [1] element
