@@ -1304,6 +1304,7 @@ impl NbtTabViewer {
         builder: &mut TreeViewBuilder<NbtNodeId>,
     ) {
         enum CopyPasteAction {
+            Delete,
             Cut,
             Copy,
             ValueInPlace,
@@ -1322,6 +1323,12 @@ impl NbtTabViewer {
 
             macro_rules! copy_paste_menu {
                 ($ui: ident) => {{
+                    if $ui
+                        .button(&*self.translations.c().button_delete_text)
+                        .clicked()
+                    {
+                        copy_paste = Some((CopyPasteAction::Delete, idx));
+                    }
                     if $ui
                         .button(&*self.translations.c().button_cut_text)
                         .clicked()
@@ -1827,6 +1834,9 @@ impl NbtTabViewer {
 
         match copy_paste {
             None => {}
+            Some((CopyPasteAction::Delete, idx)) => {
+                (**nbt).remove(idx);
+            }
             Some((CopyPasteAction::Cut, idx)) => {
                 let (k, v) = (**nbt).remove(idx);
                 self.clipboard = Some(NbtClipboard::CompoundEntry(k, v));
