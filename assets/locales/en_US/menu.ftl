@@ -45,6 +45,7 @@ nbt-list-try-change-type = Try to change type to list of
 dt-conv-warn = Warning: You may lose information by converting to and from smaller datatypes, floating point numbers or strings.
 type-conv-abort-on-fail-text = Abort on conversion fail
 type-conv-default-on-fail-text = Use default value ({$def}) on conversion fail
+list-insert-box-placeholder = Insert element
 
 list-element-count = [{$count} {$count ->
     [1] element

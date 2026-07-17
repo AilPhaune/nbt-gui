@@ -45,7 +45,7 @@ impl NbtEditorApplication {
         self.runtime.spawn(async move {
             if let Some(handles) = AsyncFileDialog::new()
                 .add_filter("Compressed/uncompressed NBT data", &["nbt", "dat"])
-                .add_filter("MCA Files (Anvil)", &["mca"])
+                .add_filter("Region Files", &["mca"])
                 .pick_files()
                 .await
             {
