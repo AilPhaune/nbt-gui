@@ -1,12 +1,12 @@
 use std::{borrow::Cow, collections::HashMap, sync::Arc};
 
 use fluent::FluentValue;
-use fluent_templates::{ArcLoader, Loader, LoaderError};
+use fluent_templates::{ArcLoader, Loader, LoaderError, MultiLoader, static_loader};
 use parking_lot::RwLock;
 use unic_langid::LanguageIdentifier;
 
 pub struct Translations {
-    loader: ArcLoader,
+    loader: MultiLoader,
     language: LanguageIdentifier,
     cache: Arc<RwLock<HashMap<&'static str, Arc<String>>>>,
     common: Arc<CommonTranslationCache>,
@@ -144,7 +144,7 @@ impl CommonTranslationCache {
             type_conv_default_on_fail_text: loader.t("type-conv-default-on-fail-text").to_string(),
             list_insert_box_placeholder: loader.t("list-insert-box-placeholder").to_string(),
 
-            type_hint_empty_list: loader.t("type-hint_empty-list").to_string(),
+            type_hint_empty_list: loader.t("type-hint-empty-list").to_string(),
             type_hint_i8: loader.t("type-hint-i8").to_string(),
             type_hint_u8: loader.t("type-hint-u8").to_string(),
             type_hint_i16: loader.t("type-hint-i16").to_string(),
@@ -176,8 +176,28 @@ impl CommonTranslationCache {
 }
 
 impl Translations {
-    pub fn load(language: LanguageIdentifier) -> Result<Self, LoaderError> {
-        let loader = ArcLoader::builder("./assets/locales", language.clone()).build()?;
+    pub fn load(
+        language: LanguageIdentifier,
+        location: Option<String>,
+    ) -> Result<Self, LoaderError> {
+        static_loader! {
+            static LOADER = {
+                locales: "./assets/locales",
+                fallback_language: "en_US",
+            };
+        };
+
+        let loader: MultiLoader = match location {
+            None => MultiLoader::from_iter([Box::new(&*LOADER) as Box<dyn Loader + Send + Sync>]),
+            Some(loc) => {
+                let loader = ArcLoader::builder(&loc, language.clone()).build()?;
+                MultiLoader::from_iter([
+                    Box::new(loader) as Box<dyn Loader + Send + Sync>,
+                    Box::new(&*LOADER) as Box<dyn Loader + Send + Sync>,
+                ])
+            }
+        };
+
         let mut translations = Self {
             common: Arc::new(Default::default()),
             loader,
