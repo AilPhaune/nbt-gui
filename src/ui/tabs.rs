@@ -402,10 +402,11 @@ macro_rules! conv_warn {
     };
 }
 
-enum CopyPasteActionArray {
+enum CopyPasteAction {
     Delete(usize),
     Copy(usize),
     Cut(usize),
+    TagAndValueInPlace(usize),
     ValueInPlace(usize),
     Insert(usize),
 }
@@ -416,21 +417,21 @@ macro_rules! array_element_copy_paste_menu {
             .button(&*$tab_viewer.translations.c().button_delete_text)
             .clicked()
         {
-            $out_copy_paste = Some(CopyPasteActionArray::Delete($idx));
+            $out_copy_paste = Some(CopyPasteAction::Delete($idx));
         }
 
         if $ui
             .button(&*$tab_viewer.translations.c().button_cut_text)
             .clicked()
         {
-            $out_copy_paste = Some(CopyPasteActionArray::Cut($idx));
+            $out_copy_paste = Some(CopyPasteAction::Cut($idx));
         }
 
         if $ui
             .button(&*$tab_viewer.translations.c().button_copy_text)
             .clicked()
         {
-            $out_copy_paste = Some(CopyPasteActionArray::Copy($idx));
+            $out_copy_paste = Some(CopyPasteAction::Copy($idx));
         }
 
         let pasteable = match &$tab_viewer.clipboard {
@@ -456,7 +457,7 @@ macro_rules! array_element_copy_paste_menu {
             .inner
             .clicked()
         {
-            $out_copy_paste = Some(CopyPasteActionArray::ValueInPlace($idx));
+            $out_copy_paste = Some(CopyPasteAction::ValueInPlace($idx));
         }
 
         if $ui
@@ -466,7 +467,7 @@ macro_rules! array_element_copy_paste_menu {
             .inner
             .clicked()
         {
-            $out_copy_paste = Some(CopyPasteActionArray::Insert($idx));
+            $out_copy_paste = Some(CopyPasteAction::Insert($idx));
         }
 
         if $ui
@@ -476,7 +477,7 @@ macro_rules! array_element_copy_paste_menu {
             .inner
             .clicked()
         {
-            $out_copy_paste = Some(CopyPasteActionArray::Insert($idx + 1));
+            $out_copy_paste = Some(CopyPasteAction::Insert($idx + 1));
         }
     }};
 }
@@ -485,25 +486,26 @@ macro_rules! array_element_copy_paste_handle_action {
     ($in_copy_paste: ident, $values: ident, $tab_viewer: ident, $tag_variant: ident) => {{
         match $in_copy_paste {
             None => {}
-            Some(CopyPasteActionArray::Delete(idx)) => {
+            Some(CopyPasteAction::TagAndValueInPlace(_)) => unreachable!(),
+            Some(CopyPasteAction::Delete(idx)) => {
                 if idx < $values.len() {
                     $values.remove(idx);
                 }
             }
-            Some(CopyPasteActionArray::Cut(idx)) => {
+            Some(CopyPasteAction::Cut(idx)) => {
                 if idx < $values.len() {
                     $tab_viewer.clipboard = Some(NbtClipboard::ListEntry(NbtTag::$tag_variant(
                         $values.remove(idx) as _,
                     )));
                 }
             }
-            Some(CopyPasteActionArray::Copy(idx)) => {
+            Some(CopyPasteAction::Copy(idx)) => {
                 if let Some(value) = $values.get(idx) {
                     $tab_viewer.clipboard =
                         Some(NbtClipboard::ListEntry(NbtTag::$tag_variant(*value as _)));
                 }
             }
-            Some(CopyPasteActionArray::ValueInPlace(idx)) => match &$tab_viewer.clipboard {
+            Some(CopyPasteAction::ValueInPlace(idx)) => match &$tab_viewer.clipboard {
                 None => {}
                 Some(NbtClipboard::ListEntry(value))
                 | Some(NbtClipboard::CompoundEntry(_, value)) => {
@@ -527,7 +529,7 @@ macro_rules! array_element_copy_paste_handle_action {
                     }
                 }
             },
-            Some(CopyPasteActionArray::Insert(idx)) => {
+            Some(CopyPasteAction::Insert(idx)) => {
                 macro_rules! ins {
                     ($v: expr) => {
                         $values.insert(idx, From2::from2(*$v))
@@ -601,7 +603,7 @@ macro_rules! array_add_insert_element_input {
                         .inner
                         .clicked()
                     {
-                        $copy_paste = Some(CopyPasteActionArray::Insert($array.len()));
+                        $copy_paste = Some(CopyPasteAction::Insert($array.len()));
                     }
                 },
                 double_click: None::<&mut dyn FnMut()>,
@@ -1143,13 +1145,13 @@ impl NbtTabViewer {
         macro_rules! copy_paste_menu {
             ($copy_paste: ident, $translations: expr, $clipboard: expr, $ui: ident, $idx: ident, $pasteable: expr) => {{
                 if $ui.button(&*$translations.c().button_delete_text).clicked() {
-                    $copy_paste = Some(CopyPasteActionArray::Delete($idx));
+                    $copy_paste = Some(CopyPasteAction::Delete($idx));
                 }
                 if $ui.button(&*$translations.c().button_cut_text).clicked() {
-                    $copy_paste = Some(CopyPasteActionArray::Cut($idx));
+                    $copy_paste = Some(CopyPasteAction::Cut($idx));
                 }
                 if $ui.button(&*$translations.c().button_copy_text).clicked() {
-                    $copy_paste = Some(CopyPasteActionArray::Copy($idx));
+                    $copy_paste = Some(CopyPasteAction::Copy($idx));
                 }
 
                 let pasteable = match $clipboard {
@@ -1165,7 +1167,7 @@ impl NbtTabViewer {
                     .inner
                     .clicked()
                 {
-                    $copy_paste = Some(CopyPasteActionArray::ValueInPlace($idx));
+                    $copy_paste = Some(CopyPasteAction::ValueInPlace($idx));
                 }
 
                 if $ui
@@ -1175,7 +1177,7 @@ impl NbtTabViewer {
                     .inner
                     .clicked()
                 {
-                    $copy_paste = Some(CopyPasteActionArray::Insert($idx));
+                    $copy_paste = Some(CopyPasteAction::Insert($idx));
                 }
 
                 if $ui
@@ -1185,7 +1187,7 @@ impl NbtTabViewer {
                     .inner
                     .clicked()
                 {
-                    $copy_paste = Some(CopyPasteActionArray::Insert($idx + 1));
+                    $copy_paste = Some(CopyPasteAction::Insert($idx + 1));
                 }
             }};
         }
@@ -1278,7 +1280,7 @@ impl NbtTabViewer {
                                 .inner
                                 .clicked()
                             {
-                                copy_paste = Some(CopyPasteActionArray::Insert($values.len()));
+                                copy_paste = Some(CopyPasteAction::Insert($values.len()));
                             }
                         },
                         double_click: None::<&mut dyn FnMut()>,
@@ -1291,23 +1293,24 @@ impl NbtTabViewer {
 
                 match copy_paste {
                     None => {}
-                    Some(CopyPasteActionArray::Delete(idx)) => {
+                    Some(CopyPasteAction::TagAndValueInPlace(_)) => unreachable!(),
+                    Some(CopyPasteAction::Delete(idx)) => {
                         $values.remove(idx);
                     }
-                    Some(CopyPasteActionArray::Cut(idx)) => {
+                    Some(CopyPasteAction::Cut(idx)) => {
                         if idx < $values.len() {
                             self.clipboard = Some(NbtClipboard::ListEntry(NbtTag::$tag_variant(
                                 $values.remove(idx),
                             )));
                         }
                     }
-                    Some(CopyPasteActionArray::Copy(idx)) => {
+                    Some(CopyPasteAction::Copy(idx)) => {
                         if let Some(value) = $values.get(idx) {
                             self.clipboard =
                                 Some(NbtClipboard::ListEntry(NbtTag::$tag_variant(value.clone())));
                         }
                     }
-                    Some(CopyPasteActionArray::ValueInPlace(idx)) => match &self.clipboard {
+                    Some(CopyPasteAction::ValueInPlace(idx)) => match &self.clipboard {
                         None => {}
                         Some(NbtClipboard::CompoundEntry(_, value))
                         | Some(NbtClipboard::ListEntry(value)) => {
@@ -1331,7 +1334,7 @@ impl NbtTabViewer {
                             }
                         }
                     },
-                    Some(CopyPasteActionArray::Insert(idx)) => match &self.clipboard {
+                    Some(CopyPasteAction::Insert(idx)) => match &self.clipboard {
                         None => {}
                         Some(NbtClipboard::CompoundEntry(_, value))
                         | Some(NbtClipboard::ListEntry(value))
@@ -1395,7 +1398,7 @@ impl NbtTabViewer {
                                 .inner
                                 .clicked()
                             {
-                                $copy_paste = Some(CopyPasteActionArray::Insert($values.len()));
+                                $copy_paste = Some(CopyPasteAction::Insert($values.len()));
                             }
                         },
                         double_click: Some(|| {
@@ -1544,23 +1547,24 @@ impl NbtTabViewer {
 
                 match copy_paste {
                     None => {}
-                    Some(CopyPasteActionArray::Delete(idx)) => {
+                    Some(CopyPasteAction::TagAndValueInPlace(_)) => unreachable!(),
+                    Some(CopyPasteAction::Delete(idx)) => {
                         $values.remove(idx);
                     }
-                    Some(CopyPasteActionArray::Cut(idx)) => {
+                    Some(CopyPasteAction::Cut(idx)) => {
                         if idx < $values.len() {
                             self.clipboard = Some(NbtClipboard::ListEntry(NbtTag::$tag_variant(
                                 $values.remove(idx),
                             )));
                         }
                     }
-                    Some(CopyPasteActionArray::Copy(idx)) => {
+                    Some(CopyPasteAction::Copy(idx)) => {
                         if let Some(value) = $values.get(idx) {
                             self.clipboard =
                                 Some(NbtClipboard::ListEntry(NbtTag::$tag_variant(value.clone())));
                         }
                     }
-                    Some(CopyPasteActionArray::ValueInPlace(idx)) => match &self.clipboard {
+                    Some(CopyPasteAction::ValueInPlace(idx)) => match &self.clipboard {
                         None => {}
                         Some(NbtClipboard::CompoundEntry(_, value))
                         | Some(NbtClipboard::ListEntry(value)) => {
@@ -1585,7 +1589,7 @@ impl NbtTabViewer {
                             }
                         }
                     },
-                    Some(CopyPasteActionArray::Insert(idx)) => match &self.clipboard {
+                    Some(CopyPasteAction::Insert(idx)) => match &self.clipboard {
                         None => {}
                         Some(NbtClipboard::CompoundEntry(_, value))
                         | Some(NbtClipboard::ListEntry(value))
@@ -1724,22 +1728,23 @@ impl NbtTabViewer {
 
                 match copy_paste {
                     None => {}
-                    Some(CopyPasteActionArray::Delete(idx)) => {
+                    Some(CopyPasteAction::TagAndValueInPlace(_)) => unreachable!(),
+                    Some(CopyPasteAction::Delete(idx)) => {
                         ls.remove(idx);
                     }
-                    Some(CopyPasteActionArray::Cut(idx)) => {
+                    Some(CopyPasteAction::Cut(idx)) => {
                         if idx < ls.len() {
                             self.clipboard =
                                 Some(NbtClipboard::ListEntry(NbtTag::List(ls.remove(idx))));
                         }
                     }
-                    Some(CopyPasteActionArray::Copy(idx)) => {
+                    Some(CopyPasteAction::Copy(idx)) => {
                         if let Some(value) = ls.get(idx) {
                             self.clipboard =
                                 Some(NbtClipboard::ListEntry(NbtTag::List(value.clone())));
                         }
                     }
-                    Some(CopyPasteActionArray::ValueInPlace(idx)) => match &self.clipboard {
+                    Some(CopyPasteAction::ValueInPlace(idx)) => match &self.clipboard {
                         None => {}
                         Some(NbtClipboard::CompoundEntry(_, value))
                         | Some(NbtClipboard::ListEntry(value)) => {
@@ -1757,7 +1762,7 @@ impl NbtTabViewer {
                             }
                         }
                     },
-                    Some(CopyPasteActionArray::Insert(idx)) => match &self.clipboard {
+                    Some(CopyPasteAction::Insert(idx)) => match &self.clipboard {
                         None => {}
                         Some(NbtClipboard::CompoundEntry(_, value))
                         | Some(NbtClipboard::ListEntry(value))
@@ -1850,22 +1855,23 @@ impl NbtTabViewer {
 
                 match copy_paste {
                     None => {}
-                    Some(CopyPasteActionArray::Delete(idx)) => {
+                    Some(CopyPasteAction::TagAndValueInPlace(_)) => unreachable!(),
+                    Some(CopyPasteAction::Delete(idx)) => {
                         cs.remove(idx);
                     }
-                    Some(CopyPasteActionArray::Cut(idx)) => {
+                    Some(CopyPasteAction::Cut(idx)) => {
                         if idx < cs.len() {
                             self.clipboard =
                                 Some(NbtClipboard::ListEntry(NbtTag::Compound(cs.remove(idx))));
                         }
                     }
-                    Some(CopyPasteActionArray::Copy(idx)) => {
+                    Some(CopyPasteAction::Copy(idx)) => {
                         if let Some(value) = cs.get(idx) {
                             self.clipboard =
                                 Some(NbtClipboard::ListEntry(NbtTag::Compound(value.clone())));
                         }
                     }
-                    Some(CopyPasteActionArray::ValueInPlace(idx)) => match &self.clipboard {
+                    Some(CopyPasteAction::ValueInPlace(idx)) => match &self.clipboard {
                         None => {}
                         Some(NbtClipboard::CompoundEntry(_, value))
                         | Some(NbtClipboard::ListEntry(value)) => {
@@ -1876,7 +1882,7 @@ impl NbtTabViewer {
                             }
                         }
                     },
-                    Some(CopyPasteActionArray::Insert(idx)) => match &self.clipboard {
+                    Some(CopyPasteAction::Insert(idx)) => match &self.clipboard {
                         None => {}
                         Some(NbtClipboard::CompoundEntry(_, value))
                         | Some(NbtClipboard::ListEntry(value)) => {
@@ -2216,16 +2222,6 @@ impl NbtTabViewer {
         egui_id: Id,
         builder: &mut TreeViewBuilder<NbtNodeId>,
     ) {
-        enum CopyPasteAction {
-            Delete,
-            Cut,
-            Copy,
-            ValueInPlace,
-            TagAndValueInPlace,
-            InsertAbove,
-            InsertBelow,
-        }
-
         let mut edit = None;
         let mut copy_paste = None;
 
@@ -2242,19 +2238,19 @@ impl NbtTabViewer {
                         .button(&*self.translations.c().button_delete_text)
                         .clicked()
                     {
-                        copy_paste = Some((CopyPasteAction::Delete, idx));
+                        copy_paste = Some(CopyPasteAction::Delete(idx));
                     }
                     if $ui
                         .button(&*self.translations.c().button_cut_text)
                         .clicked()
                     {
-                        copy_paste = Some((CopyPasteAction::Cut, idx));
+                        copy_paste = Some(CopyPasteAction::Cut(idx));
                     }
                     if $ui
                         .button(&*self.translations.c().button_copy_text)
                         .clicked()
                     {
-                        copy_paste = Some((CopyPasteAction::Copy, idx));
+                        copy_paste = Some(CopyPasteAction::Copy(idx));
                     }
 
                     let clipboard_type = match &self.clipboard {
@@ -2270,7 +2266,7 @@ impl NbtTabViewer {
                         .inner
                         .clicked()
                     {
-                        copy_paste = Some((CopyPasteAction::ValueInPlace, idx));
+                        copy_paste = Some(CopyPasteAction::ValueInPlace(idx));
                     }
 
                     if $ui
@@ -2280,7 +2276,7 @@ impl NbtTabViewer {
                         .inner
                         .clicked()
                     {
-                        copy_paste = Some((CopyPasteAction::TagAndValueInPlace, idx));
+                        copy_paste = Some(CopyPasteAction::TagAndValueInPlace(idx));
                     }
 
                     if $ui
@@ -2290,7 +2286,7 @@ impl NbtTabViewer {
                         .inner
                         .clicked()
                     {
-                        copy_paste = Some((CopyPasteAction::InsertAbove, idx));
+                        copy_paste = Some(CopyPasteAction::Insert(idx));
                     }
 
                     if $ui
@@ -2300,7 +2296,7 @@ impl NbtTabViewer {
                         .inner
                         .clicked()
                     {
-                        copy_paste = Some((CopyPasteAction::InsertBelow, idx));
+                        copy_paste = Some(CopyPasteAction::Insert(idx + 1));
                     }
                 }};
             }
@@ -2747,19 +2743,19 @@ impl NbtTabViewer {
 
         match copy_paste {
             None => {}
-            Some((CopyPasteAction::Delete, idx)) => {
+            Some(CopyPasteAction::Delete(idx)) => {
                 (**nbt).remove(idx);
             }
-            Some((CopyPasteAction::Cut, idx)) => {
+            Some(CopyPasteAction::Cut(idx)) => {
                 let (k, v) = (**nbt).remove(idx);
                 self.clipboard = Some(NbtClipboard::CompoundEntry(k, v));
             }
-            Some((CopyPasteAction::Copy, idx)) => {
+            Some(CopyPasteAction::Copy(idx)) => {
                 if let Some((k, v)) = (**nbt).get(idx) {
                     self.clipboard = Some(NbtClipboard::CompoundEntry(k.clone(), v.clone()));
                 }
             }
-            Some((CopyPasteAction::ValueInPlace, idx)) => match &self.clipboard {
+            Some(CopyPasteAction::ValueInPlace(idx)) => match &self.clipboard {
                 None => {}
                 Some(NbtClipboard::CompoundEntry(_, tag)) | Some(NbtClipboard::ListEntry(tag)) => {
                     if let Some((_, v)) = (**nbt).get_mut(idx) {
@@ -2767,7 +2763,7 @@ impl NbtTabViewer {
                     }
                 }
             },
-            Some((CopyPasteAction::TagAndValueInPlace, idx)) => match &self.clipboard {
+            Some(CopyPasteAction::TagAndValueInPlace(idx)) => match &self.clipboard {
                 None => {}
                 Some(NbtClipboard::ListEntry(_)) => {}
                 Some(NbtClipboard::CompoundEntry(key, tag)) => {
@@ -2776,22 +2772,13 @@ impl NbtTabViewer {
                     }
                 }
             },
-            Some((CopyPasteAction::InsertAbove, idx)) => match &self.clipboard {
+            Some(CopyPasteAction::Insert(idx)) => match &self.clipboard {
                 None => {}
                 Some(NbtClipboard::ListEntry(tag)) => {
                     (**nbt).insert(idx, ("".into(), tag.clone()));
                 }
                 Some(NbtClipboard::CompoundEntry(key, tag)) => {
                     (**nbt).insert(idx, (key.clone(), tag.clone()));
-                }
-            },
-            Some((CopyPasteAction::InsertBelow, idx)) => match &self.clipboard {
-                None => {}
-                Some(NbtClipboard::ListEntry(tag)) => {
-                    (**nbt).insert(idx + 1, ("".into(), tag.clone()));
-                }
-                Some(NbtClipboard::CompoundEntry(key, tag)) => {
-                    (**nbt).insert(idx + 1, (key.clone(), tag.clone()));
                 }
             },
         }
