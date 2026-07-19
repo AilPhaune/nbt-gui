@@ -2,8 +2,8 @@ use std::{collections::HashMap, hash::Hash, path::PathBuf, str::FromStr, sync::A
 
 use anyhow::{Context, anyhow};
 use egui::{
-    Align, FontFamily, Id, Key, Label, Layout, RichText, Sense, Spinner, Stroke, TextEdit, Ui,
-    Widget,
+    Align, ComboBox, FontFamily, Id, Key, Label, Layout, RichText, Sense, Spinner, Stroke,
+    TextEdit, Ui, Widget,
 };
 use egui_dock::{TabViewer, tab_viewer::OnCloseResponse};
 use egui_ltreeview::{NodeBuilder, TreeView, TreeViewBuilder};
@@ -15,8 +15,9 @@ use simdnbt::{
 };
 
 use crate::{
+    document::{ChunkData, DocumentData, MCRegionEditor, NbtCompression, NbtDocumentTab},
     i18n::Translations,
-    ui::document::{DocumentData, NbtCompression, NbtDocumentTab},
+    mcregion::{ChunkCompression, ChunkCoordsIterator, ChunkIteratorDirection},
 };
 
 pub trait NbtValue: Sized + 'static {
@@ -86,7 +87,7 @@ macro_rules! impl_fromstr2 {
     };
 }
 
-impl_fromstr2!(i8 => 0, u8 => 0, i16 => 0, i32 => 0, i64 => 0, f32 => f32::NAN, f64 => f64::NAN);
+impl_fromstr2!(i8 => 0, u8 => 0, i16 => 0, i32 => 0, u32 => 0, i64 => 0, f32 => f32::NAN, f64 => f64::NAN);
 
 pub trait From2<T> {
     fn from2(value: T) -> Self;
@@ -260,6 +261,7 @@ pub struct NbtTabViewer {
     pub events_tx: UnboundedSender<TabEvent>,
     pub last_tab_id: usize,
     pub translations: Arc<Translations>,
+    pub icon_compression: (char, FontFamily),
     pub icon_base_nbt: (char, FontFamily),
     pub icon_nothing: (char, FontFamily),
     pub icon_compound_nbt: (char, FontFamily),
@@ -267,6 +269,8 @@ pub struct NbtTabViewer {
     pub icon_string: (char, FontFamily),
     pub icon_list: (char, FontFamily),
     pub icon_array: (char, FontFamily),
+    pub icon_region: (char, FontFamily),
+    pub icon_chunk: (char, FontFamily),
 
     pub clipboard: Option<NbtClipboard>,
 }
@@ -640,6 +644,35 @@ struct EntryContext<
     double_click: Option<DoubleClickFn>,
 }
 
+fn format_bytes(bytes: u64) -> String {
+    const UNITS: &[&str] = &["B", "KB", "MB", "GB", "TB"];
+
+    let mut size = bytes as f64;
+    let mut unit = 0;
+
+    while size >= 1024.0 && unit < UNITS.len() - 1 {
+        size /= 1024.0;
+        unit += 1;
+    }
+
+    if unit == 0 {
+        format!("{} {}", bytes, UNITS[unit])
+    } else {
+        format!("{:.2} {}", size, UNITS[unit])
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+struct ChunkLabelData {
+    x: u8,
+    z: u8,
+    uncompressed_size: usize,
+    compressed_size: usize,
+    oversized: bool,
+    generated: bool,
+    external: bool,
+}
+
 impl NbtTabViewer {
     pub fn new(translations: Arc<Translations>) -> anyhow::Result<Self> {
         let (events_tx, events_rx) = unbounded();
@@ -647,6 +680,12 @@ impl NbtTabViewer {
         Ok(Self {
             per_short_title: HashMap::new(),
             last_tab_id: 0,
+            icon_compression: get_icon(
+                Pack::Lucide,
+                "file-archive",
+                Style::Regular,
+                Size::Regular,
+            )?,
             icon_base_nbt: get_icon(Pack::Lucide, "folder", Style::Regular, Size::Regular)?,
             icon_nothing: get_icon(
                 Pack::Lucide,
@@ -664,6 +703,9 @@ impl NbtTabViewer {
             )?,
             icon_list: get_icon(Pack::Lucide, "list", Style::Regular, Size::Regular)?,
             icon_array: get_icon(Pack::Lucide, "brackets", Style::Regular, Size::Regular)?,
+            icon_region: get_icon(Pack::Lucide, "map", Style::Regular, Size::Regular)?,
+            icon_chunk: get_icon(Pack::Lucide, "boxes", Style::Regular, Size::Regular)?,
+
             translations,
             events_rx,
             events_tx,
@@ -875,13 +917,14 @@ impl NbtTabViewer {
     fn show_nbt_tree(
         &mut self,
         nbt: &mut Nbt,
+        id: NbtNodeId,
         egui_id: Id,
         builder: &mut TreeViewBuilder<NbtNodeId>,
     ) {
         match nbt {
             Nbt::None => {
                 builder.node(
-                    NodeBuilder::leaf(NbtNodeId::default())
+                    NodeBuilder::leaf(id)
                         .label_ui(|ui| {
                             ui.horizontal(|ui| {
                                 Label::new(
@@ -958,7 +1001,7 @@ impl NbtTabViewer {
                 let mut base_action = None;
 
                 let dir_open = builder.node(
-                    NodeBuilder::dir(NbtNodeId::default())
+                    NodeBuilder::dir(id.clone())
                         .label_ui(|ui| {
                             self.build_base_nbt_label(ui, egui_id, bnbt);
                         })
@@ -969,12 +1012,7 @@ impl NbtTabViewer {
                 );
 
                 if dir_open {
-                    self.show_compound_tree(
-                        &mut *bnbt,
-                        NbtNodeId::default(),
-                        egui_id.with(0),
-                        builder,
-                    );
+                    self.show_compound_tree(&mut *bnbt, id, egui_id.with(0), builder);
                 }
 
                 builder.close_dir();
@@ -1110,6 +1148,285 @@ impl NbtTabViewer {
         );
 
         (open, ret, ret_new_val)
+    }
+
+    fn build_region_label(&mut self, ui: &mut Ui, id: Id) {
+        ui.horizontal(|ui| {
+            ui.spacing_mut().item_spacing.x = 4.0;
+
+            Label::new(
+                RichText::new(self.icon_region.0)
+                    .family(self.icon_region.1.clone())
+                    .color(ui.visuals().text_color()),
+            )
+            .sense(Sense::empty())
+            .selectable(false)
+            .ui(ui);
+
+            Self::editable_str_label(
+                ui,
+                id,
+                &self.translations.c().region_label_text,
+                "",
+                || {},
+                true,
+            );
+        });
+    }
+
+    fn build_chunk_label(
+        &mut self,
+        ui: &mut Ui,
+        id: Id,
+        ChunkLabelData {
+            x,
+            z,
+            uncompressed_size,
+            compressed_size,
+            oversized,
+            generated,
+            external,
+        }: ChunkLabelData,
+    ) {
+        ui.horizontal(|ui| {
+            ui.spacing_mut().item_spacing.x = 4.0;
+
+            Label::new(
+                RichText::new(self.icon_chunk.0)
+                    .family(self.icon_chunk.1.clone())
+                    .color(ui.visuals().text_color()),
+            )
+            .sense(Sense::empty())
+            .selectable(false)
+            .ui(ui);
+
+            Self::editable_str_label(
+                ui,
+                id,
+                &self.translations.f(
+                    if external {
+                        "chunk-label-external"
+                    } else if !generated {
+                        "chunk-label-ungenerated"
+                    } else if oversized {
+                        "chunk-label-text-oversized"
+                    } else {
+                        "chunk-label-text"
+                    },
+                    &HashMap::from_iter([
+                        ("x".into(), x.into()),
+                        ("z".into(), z.into()),
+                        (
+                            "uncompressed_size".into(),
+                            format_bytes(uncompressed_size as u64).into(),
+                        ),
+                        (
+                            "compressed_size".into(),
+                            format_bytes(compressed_size as u64).into(),
+                        ),
+                    ]),
+                ),
+                "",
+                || {},
+                true,
+            );
+        });
+    }
+
+    fn show_region_tree(
+        &mut self,
+        reg: &mut MCRegionEditor,
+        direction: &mut ChunkIteratorDirection,
+        egui_id: Id,
+        builder: &mut TreeViewBuilder<NbtNodeId>,
+    ) {
+        let dir_open = builder.node(
+            NodeBuilder::dir(NbtNodeId::default())
+                .label_ui(|ui| {
+                    self.build_region_label(ui, egui_id);
+                })
+                .default_open(false),
+        );
+
+        if dir_open {
+            for (idx, (((x, z), chunk), child_id)) in ChunkCoordsIterator::new(*direction)
+                .zip(reg.iter_mut())
+                .zip(NbtNodeId::default().childs())
+                .enumerate()
+            {
+                let egui_id = egui_id.with(idx);
+
+                macro_rules! show_chunk {
+                    ($label_data: expr, $compression: ident, $timestamp: ident, $nbt: expr) => {{
+                        let chunk_open = builder.node(
+                            NodeBuilder::dir(child_id.clone())
+                                .label_ui(|ui| {
+                                    self.build_chunk_label(ui, egui_id, $label_data);
+                                })
+                                .default_open(false),
+                        );
+
+                        if chunk_open {
+                            let mut child_ids = child_id.childs();
+
+                            builder.node(NodeBuilder::leaf(child_ids.next().unwrap()).label_ui(
+                                |ui| {
+                                    ui.horizontal(|ui| {
+                                        Label::new(
+                                            RichText::new(self.icon_compression.0)
+                                                .family(self.icon_compression.1.clone())
+                                                .color(ui.visuals().text_color()),
+                                        )
+                                        .sense(Sense::empty())
+                                        .selectable(false)
+                                        .show_tooltip_when_elided(false)
+                                        .ui(ui);
+
+                                        ComboBox::from_id_salt("compression")
+                                            .selected_text(format!("{:?}", *$compression))
+                                            .show_ui(ui, |ui| {
+                                                ui.selectable_value(
+                                                    $compression,
+                                                    ChunkCompression::None,
+                                                    "None",
+                                                );
+                                                ui.selectable_value(
+                                                    $compression,
+                                                    ChunkCompression::Gzip,
+                                                    "Gzip",
+                                                );
+                                                ui.selectable_value(
+                                                    $compression,
+                                                    ChunkCompression::Zlib,
+                                                    "Zlib",
+                                                );
+                                                ui.selectable_value(
+                                                    $compression,
+                                                    ChunkCompression::Lz4,
+                                                    "Lz4",
+                                                );
+                                            });
+                                    });
+                                },
+                            ));
+
+                            let mut copy_timestamp = false;
+
+                            let (_, _, new_timestamp) = self.show_entry(
+                                child_ids.next().unwrap(),
+                                egui_id.with("timestamp"),
+                                builder,
+                                EntryContext {
+                                    val: Some($timestamp),
+                                    key: Some(&self.translations.c().timestamp_field_text),
+                                    idx: None,
+                                    extra: None,
+                                    icon: &self.icon_numeric,
+                                    type_hint: &self.translations.c().type_hint_i32,
+                                    empty_key_text: "",
+                                    empty_val_text: "",
+                                    context_menu: |ui| {
+                                        if ui
+                                            .button(&*self.translations.c().button_copy_text)
+                                            .clicked()
+                                        {
+                                            copy_timestamp = true;
+                                        }
+                                    },
+                                    double_click: None::<&mut dyn FnMut()>,
+                                },
+                            );
+
+                            if let Some(nbt) = $nbt {
+                                self.show_nbt_tree(
+                                    nbt,
+                                    child_ids.next().unwrap(),
+                                    egui_id.with("chunk-nbt"),
+                                    builder,
+                                );
+                            }
+
+                            if copy_timestamp {
+                                self.clipboard = Some(NbtClipboard::CompoundEntry(
+                                    "timestamp".into(),
+                                    NbtTag::Int(*$timestamp as i32),
+                                ))
+                            }
+
+                            if let Some(new_timestamp) = new_timestamp {
+                                *$timestamp = new_timestamp;
+                            }
+                        }
+
+                        builder.close_dir();
+                    }};
+                }
+
+                match chunk {
+                    ChunkData::NotGenerated => {
+                        builder.node(NodeBuilder::leaf(child_id).label_ui(|ui| {
+                            self.build_chunk_label(
+                                ui,
+                                egui_id,
+                                ChunkLabelData {
+                                    x,
+                                    z,
+                                    uncompressed_size: 0,
+                                    compressed_size: 0,
+                                    oversized: false,
+                                    generated: false,
+                                    external: false,
+                                },
+                            );
+                        }));
+                    }
+                    ChunkData::External {
+                        compression,
+                        timestamp,
+                    } => {
+                        show_chunk!(
+                            ChunkLabelData {
+                                x,
+                                z,
+                                uncompressed_size: 0,
+                                compressed_size: 0,
+                                oversized: false,
+                                generated: true,
+                                external: true,
+                            },
+                            compression,
+                            timestamp,
+                            None
+                        );
+                    }
+                    ChunkData::Chunk {
+                        uncompressed_size_on_read,
+                        compressed_size_on_read,
+                        was_oversized,
+                        compression,
+                        timestamp,
+                        nbt,
+                    } => {
+                        show_chunk!(
+                            ChunkLabelData {
+                                x,
+                                z,
+                                uncompressed_size: *uncompressed_size_on_read,
+                                compressed_size: *compressed_size_on_read,
+                                oversized: *was_oversized,
+                                generated: true,
+                                external: false,
+                            },
+                            compression,
+                            timestamp,
+                            Some(nbt)
+                        );
+                    }
+                }
+            }
+        }
+
+        builder.close_dir();
     }
 
     fn show_list<T>(
@@ -2838,10 +3155,19 @@ impl TabViewer for NbtTabViewer {
                         });
                 });
                 ui.separator();
+
                 let tree_rect = ui.available_rect_before_wrap();
                 ui.allocate_ui(tree_rect.size(), |ui| {
                     TreeView::new("nbt_tree".into()).show(ui, |builder| {
-                        self.show_nbt_tree(nbt, tab.root_id, builder);
+                        self.show_nbt_tree(nbt, NbtNodeId::default(), tab.root_id, builder);
+                    });
+                });
+            }
+            DocumentData::MCRegion(wr, direction) => {
+                let tree_rect = ui.available_rect_before_wrap();
+                ui.allocate_ui(tree_rect.size(), |ui| {
+                    TreeView::new("nbt_tree".into()).show(ui, |builder| {
+                        self.show_region_tree(wr, direction, tab.root_id, builder);
                     });
                 });
             }

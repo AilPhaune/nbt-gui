@@ -1,6 +1,8 @@
 pub mod app;
+pub mod document;
 pub mod examples;
 pub mod i18n;
+pub mod mcregion;
 pub mod ui;
 
 use std::sync::Arc;

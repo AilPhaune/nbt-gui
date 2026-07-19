@@ -1,5 +1,5 @@
 use std::{
-    fs::{self, OpenOptions},
+    fs::{File, OpenOptions},
     io::{Cursor, Read, Write},
     path::{Path, PathBuf},
     sync::Arc,
@@ -13,8 +13,14 @@ use flate2::{
     read::{GzDecoder, ZlibDecoder},
     write::{GzEncoder, ZlibEncoder},
 };
+use memmap2::Mmap;
 use rfd::AsyncFileDialog;
 use simdnbt::owned::Nbt;
+
+use crate::mcregion::{
+    ChunkCompression, ChunkIteratorDirection, MCRegionReader, MCRegionWriter, Options, REGION_SIZE,
+    RawChunkData, RegionReadError, RegionReaderImpl, RegionWriteError, SECTOR_SIZE, chunk_idx_fast,
+};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum NbtCompression {
@@ -28,6 +34,7 @@ pub enum DocumentData {
     Loading,
     ReadError(Arc<anyhow::Error>),
     Nbt(Nbt, NbtCompression),
+    MCRegion(Box<MCRegionEditor>, ChunkIteratorDirection),
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -37,6 +44,7 @@ pub enum NbtParseError {
         gzip: anyhow::Error,
         zlib: anyhow::Error,
         raw: anyhow::Error,
+        mcregion: anyhow::Error,
     },
     #[error("I/O Error")]
     Io(std::io::Error),
@@ -54,7 +62,7 @@ impl DocumentData {
             DocumentData::Loading => DocumentData::Loading,
             DocumentData::Saving => DocumentData::Saving,
             DocumentData::ReadError(e) => DocumentData::ReadError(Arc::clone(e)),
-            DocumentData::Nbt(_, _) => {
+            DocumentData::Nbt(_, _) | DocumentData::MCRegion(_, _) => {
                 let mut to_swap = DocumentData::Saving;
                 std::mem::swap(&mut to_swap, self);
                 to_swap
@@ -86,26 +94,50 @@ impl DocumentData {
         Ok(Self::Nbt(nbt, NbtCompression::None))
     }
 
+    #[inline(always)]
+    fn try_from_mcregion(bytes: &[u8]) -> anyhow::Result<Self> {
+        let reader = MCRegionReader::new(
+            Options {
+                allow_oversized_chunks: true,
+            },
+            bytes,
+        )?;
+        let editor = Box::new(MCRegionEditor::new(&reader)?);
+        Ok(Self::MCRegion(editor, ChunkIteratorDirection::Natural))
+    }
+
     pub fn load_from_file(path: impl AsRef<Path>) -> Result<Self, NbtParseError> {
         let path = path.as_ref();
-        let bytes = fs::read(path)?;
+        let file = File::open(path)?;
 
-        let raw = match Self::try_from_raw(&bytes) {
+        let mmap = unsafe { Mmap::map(&file)? };
+
+        let gzip = match Self::try_from_gzip(&mmap) {
             Ok(s) => return Ok(s),
             Err(e) => e,
         };
 
-        let gzip = match Self::try_from_gzip(&bytes) {
+        let zlib = match Self::try_from_zlib(&mmap) {
             Ok(s) => return Ok(s),
             Err(e) => e,
         };
 
-        let zlib = match Self::try_from_zlib(&bytes) {
+        let mcregion = match Self::try_from_mcregion(&mmap) {
             Ok(s) => return Ok(s),
             Err(e) => e,
         };
 
-        Err(NbtParseError::AllFailed { raw, gzip, zlib })
+        let raw = match Self::try_from_raw(&mmap) {
+            Ok(s) => return Ok(s),
+            Err(e) => e,
+        };
+
+        Err(NbtParseError::AllFailed {
+            raw,
+            gzip,
+            zlib,
+            mcregion,
+        })
     }
 }
 
@@ -223,7 +255,27 @@ impl NbtDocumentTab {
                             f.write_all(&data)
                         })
                         .map_err(|e| e.into());
+
                     (Some(save_loc), DocumentData::Nbt(nbt, compression), r)
+                })
+                .await
+                .unwrap(),
+                DocumentData::MCRegion(mut reg, dir) => tokio::task::spawn_blocking(move || {
+                    let r: anyhow::Result<()> = OpenOptions::new()
+                        .create(true)
+                        .write(true)
+                        .truncate(true)
+                        .open(&save_loc)
+                        .map_err(|e| e.into())
+                        .and_then(|mut f| {
+                            let writer = reg.create_writer(Options {
+                                allow_oversized_chunks: true,
+                            })?;
+                            f.write_all(&writer.reader())?;
+                            Ok(())
+                        });
+
+                    (Some(save_loc), DocumentData::MCRegion(reg, dir), r)
                 })
                 .await
                 .unwrap(),
@@ -251,5 +303,110 @@ impl NbtDocumentTab {
                 (tab_id, Err(anyhow!("Invalid state")))
             }
         }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub enum ChunkData {
+    NotGenerated,
+    External {
+        compression: ChunkCompression,
+        timestamp: u32,
+    },
+    Chunk {
+        compression: ChunkCompression,
+        uncompressed_size_on_read: usize,
+        compressed_size_on_read: usize,
+        was_oversized: bool,
+        timestamp: u32,
+        nbt: Nbt,
+    },
+}
+
+pub struct MCRegionEditor {
+    chunk_cache: [ChunkData; 1024],
+}
+
+impl MCRegionEditor {
+    pub fn new<'a, T: RegionReaderImpl<'a>>(reader: &T) -> Result<Self, RegionReadError> {
+        Ok(Self {
+            chunk_cache: ChunkIteratorDirection::Natural
+                .into_iter()
+                .map(|(x, z)| {
+                    reader
+                        .chunk_data_raw_unchecked(x, z)
+                        .and_then(|raw| match raw {
+                            RawChunkData::None => Ok(ChunkData::NotGenerated),
+                            RawChunkData::External { compression, timestamp, .. } => {
+                                Ok(ChunkData::External{compression,timestamp})
+                            }
+                            RawChunkData::Chunk {
+                                compression, bytes, timestamp, ..
+                            } => {
+                                let (uncompressed_size, nbt) = bytes.decompress_to_nbt(compression)?;
+                                Ok(ChunkData::Chunk{compression, nbt, timestamp, uncompressed_size_on_read: uncompressed_size, compressed_size_on_read: bytes.len(), was_oversized: bytes.len() > (255*SECTOR_SIZE - 5)})
+                            }
+                        })
+                })
+                .collect::<Result<Vec<_>, _>>()?
+                .try_into()
+                .expect("MCRegionEditor::new: ChunkIteratorDirection::Natural is expected to return exactly 1024 elements"),
+        })
+    }
+
+    pub fn get(&mut self, x: u8, z: u8) -> Option<&mut ChunkData> {
+        (x <= REGION_SIZE && z <= REGION_SIZE)
+            .then_some(chunk_idx_fast(x, z))
+            .and_then(|idx| self.chunk_cache.get_mut(idx))
+    }
+
+    pub fn create_writer(&mut self, options: Options) -> Result<MCRegionWriter, RegionWriteError> {
+        let mut writer = MCRegionWriter::new(options);
+
+        for ((x, z), chunk_data) in ChunkIteratorDirection::Natural
+            .into_iter()
+            .zip(&mut self.chunk_cache)
+        {
+            match chunk_data {
+                ChunkData::NotGenerated => {}
+                ChunkData::External {
+                    compression,
+                    timestamp,
+                } => {
+                    writer.write_chunk_external_unchecked(x, z, *compression, Some(*timestamp))?;
+                }
+                ChunkData::Chunk {
+                    uncompressed_size_on_read,
+                    compressed_size_on_read,
+                    was_oversized,
+                    compression,
+                    timestamp,
+                    nbt,
+                } => {
+                    let mut uncompressed_data = Vec::with_capacity(SECTOR_SIZE);
+                    nbt.write(&mut uncompressed_data);
+
+                    *uncompressed_size_on_read = uncompressed_data.len();
+
+                    let compressed_size = writer.write_chunk_data_uncompressed_unchecked(
+                        x,
+                        z,
+                        &uncompressed_data,
+                        *compression,
+                        Compression::default(),
+                        Some(*timestamp),
+                    )?;
+
+                    *compressed_size_on_read = compressed_size;
+                    *was_oversized = compressed_size > 255 * SECTOR_SIZE - 5;
+                }
+            }
+        }
+
+        Ok(writer)
+    }
+
+    pub fn iter_mut(&mut self) -> impl Iterator<Item = &mut ChunkData> {
+        self.chunk_cache.iter_mut()
     }
 }

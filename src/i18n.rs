@@ -60,6 +60,8 @@ pub struct CommonTranslationCache {
     pub type_conv_abort_on_fail_text: String,
     pub type_conv_default_on_fail_text: String,
     pub list_insert_box_placeholder: String,
+    pub region_label_text: String,
+    pub timestamp_field_text: String,
 
     pub type_hint_empty_list: String,
     pub type_hint_i8: String,
@@ -143,6 +145,8 @@ impl CommonTranslationCache {
             type_conv_abort_on_fail_text: loader.t("type-conv-abort-on-fail-text").to_string(),
             type_conv_default_on_fail_text: loader.t("type-conv-default-on-fail-text").to_string(),
             list_insert_box_placeholder: loader.t("list-insert-box-placeholder").to_string(),
+            region_label_text: loader.t("region-label-text").to_string(),
+            timestamp_field_text: loader.t("timestamp-field-text").to_string(),
 
             type_hint_empty_list: loader.t("type-hint-empty-list").to_string(),
             type_hint_i8: loader.t("type-hint-i8").to_string(),

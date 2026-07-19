@@ -9,12 +9,10 @@ use std::{collections::HashMap, sync::Arc};
 use tokio::runtime::Runtime;
 
 use crate::{
+    document::{DocumentData, NbtDocumentTab},
     examples,
     i18n::Translations,
-    ui::{
-        document::{DocumentData, NbtDocumentTab},
-        tabs::{NbtTabViewer, TabEvent},
-    },
+    ui::tabs::{NbtTabViewer, TabEvent},
 };
 
 pub struct NbtEditorApplication {
@@ -45,7 +43,7 @@ impl NbtEditorApplication {
         self.runtime.spawn(async move {
             if let Some(handles) = AsyncFileDialog::new()
                 .add_filter("Compressed/uncompressed NBT data", &["nbt", "dat"])
-                .add_filter("Region Files", &["mca"])
+                .add_filter("Region Files", &["mcr", "mca"])
                 .pick_files()
                 .await
             {

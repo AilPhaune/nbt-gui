@@ -46,6 +46,12 @@ dt-conv-warn = Warning: You may lose information by converting to and from small
 type-conv-abort-on-fail-text = Abort on conversion fail
 type-conv-default-on-fail-text = Use default value ({$def}) on conversion fail
 list-insert-box-placeholder = Insert element
+region-label-text = Region file
+chunk-label-text-oversized = Chunk at ({$x}, {$z}) [{$uncompressed_size} / {$compressed_size} (Oversized)]
+chunk-label-text = Chunk at ({$x}, {$z}) [{$uncompressed_size} / {$compressed_size}]
+chunk-label-ungenerated = Chunk at ({$x}, {$z}) [Not generated]
+chunk-label-external = Chunk at ({$x}, {$z}) [External]
+timestamp-field-text = Timestamp
 
 list-element-count = [{$count} {$count ->
     [1] element

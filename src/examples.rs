@@ -2,7 +2,7 @@ use std::{f32, f64};
 
 use simdnbt::owned::{BaseNbt, Nbt, NbtCompound, NbtList, NbtTag};
 
-use crate::ui::document::{DocumentData, NbtCompression};
+use crate::document::{DocumentData, NbtCompression};
 
 pub fn example_nbt() -> DocumentData {
     DocumentData::Nbt(
