@@ -47,7 +47,7 @@ pub enum RegionReadError {
     InvalidChunkOffset,
     #[error("Invalid compression {0}")]
     InvalidCompression(u8),
-    #[error("Oversized chunk {0}")]
+    #[error("Oversized chunk: {0} sectors > 255")]
     OversizedChunk(usize),
     #[error("Invalid backing buffer size: {0} % {SECTOR_SIZE} != 0")]
     InvalidBackingBufferSize(usize),
@@ -59,11 +59,11 @@ pub enum RegionReadError {
 
 #[derive(Debug, thiserror::Error)]
 pub enum RegionWriteError {
-    #[error("Oversized chunk {0} > {MAX_CHUNK_BYTES}")]
+    #[error("Oversized chunk: {0} sectors > 255")]
     OversizedChunk(usize),
     // This shouldn't happen as it corresponds to a 64GiB region file...
     #[error("Not enough free sectors")]
-    NotEnoguhFreeSectors,
+    NotEnoughFreeSectors,
     #[error("Reading error")]
     ReadingError(RegionReadError),
     #[error("Chunk length {0} isn't representable on 32bits")]
@@ -77,7 +77,6 @@ pub enum RegionWriteError {
 pub const SECTOR_SIZE: usize = 4096;
 pub const REGION_SIZE: u8 = 32;
 pub const REGION_SIZE_SQ: usize = (REGION_SIZE as usize).pow(2);
-pub const MAX_CHUNK_BYTES: usize = 255 * SECTOR_SIZE;
 
 #[derive(Debug, Clone, Copy, Default)]
 pub struct Options {
@@ -148,7 +147,7 @@ pub trait RegionReaderImpl<'a>: Sized + private::Sealed + Deref<Target = &'a [u8
         x: u8,
         z: u8,
     ) -> Result<Option<NonZeroU32>, RegionReadError> {
-        if x <= REGION_SIZE && z <= REGION_SIZE {
+        if x < REGION_SIZE && z < REGION_SIZE {
             self.chunk_offset_in_sectors_raw_unchecked(x, z)
         } else {
             Err(RegionReadError::InvalidChunkCoords(x, z))
@@ -161,7 +160,7 @@ pub trait RegionReaderImpl<'a>: Sized + private::Sealed + Deref<Target = &'a [u8
     }
 
     fn chunk_sector_count_raw(&self, x: u8, z: u8) -> Result<Option<NonZeroU8>, RegionReadError> {
-        if x <= REGION_SIZE && z <= REGION_SIZE {
+        if x < REGION_SIZE && z < REGION_SIZE {
             Ok(self.chunk_sector_count_raw_unchecked(x, z))
         } else {
             Err(RegionReadError::InvalidChunkCoords(x, z))
@@ -190,7 +189,7 @@ pub trait RegionReaderImpl<'a>: Sized + private::Sealed + Deref<Target = &'a [u8
         x: u8,
         z: u8,
     ) -> Result<Option<(NonZeroU32, NonZeroU8)>, RegionReadError> {
-        if x <= REGION_SIZE && z <= REGION_SIZE {
+        if x < REGION_SIZE && z < REGION_SIZE {
             self.chunk_header_unchecked(x, z)
         } else {
             Err(RegionReadError::InvalidChunkCoords(x, z))
@@ -203,7 +202,7 @@ pub trait RegionReaderImpl<'a>: Sized + private::Sealed + Deref<Target = &'a [u8
     }
 
     fn chunk_timestamp(&self, x: u8, z: u8) -> Result<Option<NonZeroU32>, RegionReadError> {
-        if x <= REGION_SIZE && z <= REGION_SIZE {
+        if x < REGION_SIZE && z < REGION_SIZE {
             Ok(self.chunk_timestamp_unchecked(x, z))
         } else {
             Err(RegionReadError::InvalidChunkCoords(x, z))
@@ -263,7 +262,9 @@ pub trait RegionReaderImpl<'a>: Sized + private::Sealed + Deref<Target = &'a [u8
                                         None => Err(RegionReadError::MissingChunkData),
                                     }
                                 } else {
-                                    Err(RegionReadError::OversizedChunk(length as usize))
+                                    Err(RegionReadError::OversizedChunk(
+                                        recalculated_sector_count as usize,
+                                    ))
                                 };
                             }
                         }
@@ -285,15 +286,15 @@ pub trait RegionReaderImpl<'a>: Sized + private::Sealed + Deref<Target = &'a [u8
     }
 
     fn chunk_data_raw(&self, x: u8, z: u8) -> Result<RawChunkData<'a>, RegionReadError> {
-        if x <= REGION_SIZE && z <= REGION_SIZE {
+        if x < REGION_SIZE && z < REGION_SIZE {
             self.chunk_data_raw_unchecked(x, z)
         } else {
-            Ok(RawChunkData::None)
+            Err(RegionReadError::InvalidChunkCoords(x, z))
         }
     }
 
     fn is_generated(&self, x: u8, z: u8) -> bool {
-        if x <= REGION_SIZE && z <= REGION_SIZE {
+        if x < REGION_SIZE && z < REGION_SIZE {
             !self.get_header_unchecked(x, z).is_none()
         } else {
             false
@@ -748,7 +749,7 @@ impl MCRegionWriter {
         unsafe {
             *(self
                 .data
-                .get_unchecked(4 * idx + 4100..4 * idx + 4100)
+                .get_unchecked(4 * idx + 4096..4 * idx + 4100)
                 .as_ptr() as *mut u32) = timestamp;
         }
     }
@@ -790,7 +791,7 @@ impl MCRegionWriter {
             return Err(RegionWriteError::UnrepresentableChunkLength(field_len));
         }
 
-        let sector_count = (field_len + 5).div_ceil(SECTOR_SIZE);
+        let sector_count = (field_len + 4).div_ceil(SECTOR_SIZE);
 
         if sector_count > 255 && !self.options.allow_oversized_chunks {
             return Err(RegionWriteError::OversizedChunk(sector_count));
@@ -803,7 +804,7 @@ impl MCRegionWriter {
 
         let Some(new_header) = MCRegionHeader::new(offset, sector_count.min(255) as u8) else {
             // User messed up
-            return Err(RegionWriteError::NotEnoguhFreeSectors);
+            return Err(RegionWriteError::NotEnoughFreeSectors);
         };
 
         let compression_byte = match compression {
@@ -836,7 +837,7 @@ impl MCRegionWriter {
         compressed_data: &[u8],
         compression: ChunkCompression,
     ) -> Result<usize, RegionWriteError> {
-        if x <= REGION_SIZE && z <= REGION_SIZE {
+        if x < REGION_SIZE && z < REGION_SIZE {
             self.write_chunk_data_compressed_unchecked(x, z, compressed_data, compression)
         } else {
             Err(RegionWriteError::InvalidChunkCoords(x, z))
@@ -879,11 +880,7 @@ impl MCRegionWriter {
             }
         };
 
-        if let Some(timestamp) = timestamp {
-            self.set_timestamp_unchecked(x, z, timestamp);
-        }
-
-        self.write_chunk_data_compressed_unchecked(
+        let bytes_written = self.write_chunk_data_compressed_unchecked(
             x,
             z,
             match compression {
@@ -893,7 +890,13 @@ impl MCRegionWriter {
                 }
             },
             compression,
-        )
+        )?;
+
+        if let Some(timestamp) = timestamp {
+            self.set_timestamp_unchecked(x, z, timestamp);
+        }
+
+        Ok(bytes_written)
     }
 
     pub fn write_chunk_data_uncompressed(
@@ -905,7 +908,7 @@ impl MCRegionWriter {
         compression_level: Compression,
         timestamp: Option<u32>,
     ) -> Result<usize, RegionWriteError> {
-        if x <= REGION_SIZE && z <= REGION_SIZE {
+        if x < REGION_SIZE && z < REGION_SIZE {
             self.write_chunk_data_uncompressed_unchecked(
                 x,
                 z,
@@ -934,7 +937,7 @@ impl MCRegionWriter {
             ChunkCompression::Zlib => 2,
             ChunkCompression::None => 3,
             ChunkCompression::Lz4 => 4,
-        };
+        } | 0x80; // external
 
         let offset = self
             .allocator
@@ -943,7 +946,7 @@ impl MCRegionWriter {
 
         let Some(new_header) = MCRegionHeader::new(offset, 1) else {
             // User messed up
-            return Err(RegionWriteError::NotEnoguhFreeSectors);
+            return Err(RegionWriteError::NotEnoughFreeSectors);
         };
 
         let bytes = self.get_or_grow((offset * SECTOR_SIZE)..(offset * SECTOR_SIZE + 5));
@@ -970,7 +973,7 @@ impl MCRegionWriter {
         compression: ChunkCompression,
         timestamp: Option<u32>,
     ) -> Result<(), RegionWriteError> {
-        if x <= REGION_SIZE && z <= REGION_SIZE {
+        if x < REGION_SIZE && z < REGION_SIZE {
             self.write_chunk_external_unchecked(x, z, compression, timestamp)
         } else {
             Err(RegionWriteError::InvalidChunkCoords(x, z))
@@ -985,7 +988,7 @@ impl MCRegionWriter {
     }
 
     pub fn write_chunk_free(&mut self, x: u8, z: u8) -> Result<(), RegionWriteError> {
-        if x <= REGION_SIZE && z <= REGION_SIZE {
+        if x < REGION_SIZE && z < REGION_SIZE {
             self.write_chunk_free_unchecked(x, z)
         } else {
             Err(RegionWriteError::InvalidChunkCoords(x, z))
@@ -1018,7 +1021,7 @@ impl<'a> RegionReaderImpl<'a> for WrappedMCRegionReader<'a> {
         unsafe {
             *(self
                 .0
-                .get_unchecked(4 * idx + 4100..4 * idx + 4100)
+                .get_unchecked(4 * idx + 4096..4 * idx + 4100)
                 .as_ptr() as *const u32)
         }
     }
@@ -1111,7 +1114,14 @@ impl Iterator for ChunkCoordsIterator {
     }
 
     fn count(self) -> usize {
-        let idx = self.x as usize + REGION_SIZE as usize * self.z as usize;
+        let idx = match self.direction {
+            ChunkIteratorDirection::Natural => {
+                self.x as usize + REGION_SIZE as usize * self.z as usize
+            }
+            ChunkIteratorDirection::Transpose => {
+                REGION_SIZE as usize * self.x as usize + self.z as usize
+            }
+        };
         REGION_SIZE_SQ.saturating_sub(idx)
     }
 }
